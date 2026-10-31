@@ -1,0 +1,69 @@
+{
+  "name": "eesg",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "glm",
+    "freetype",
+    "nlohmann-json",
+    "boost-type-traits",
+    "boost-uuid",
+    "boost-geometry",
+    "boost-graph",
+    "boost-multi-index",
+    "boost-container",
+    "boost-describe",
+    "boost-stacktrace",
+    "boost-static-string",
+    "boost-program-options",
+    "boost-lockfree",
+    {
+      "name": "spdlog",
+      "features": [
+        "fmt"
+      ]
+    },
+    {
+      "name": "imgui",
+      "features": [
+        "freetype-svg",
+        "glfw-binding",
+        "opengl3-binding",
+        "vulkan-binding",
+        "docking-experimental"
+      ]
+    },
+    "implot",
+    {
+      "name": "glfw3",
+      "features": [
+        "wayland"
+      ]
+    },
+    {
+      "name": "mimalloc",
+      "features": [
+        "override"
+      ]
+    },
+    "tracy",
+    "glew",
+    {
+      "name": "openxr-loader",
+      "features": [
+        "vulkan"
+      ]
+    },
+    "vulkan",
+    "vulkan-memory-allocator",
+    "pugixml",
+    "gtest",
+    "rpclib",
+    "entt",
+    "tinygltf",
+    "shader-slang",
+    "glslang",
+    "spirv-cross",
+    "libevdev",
+    "msquic"
+  ]
+}
