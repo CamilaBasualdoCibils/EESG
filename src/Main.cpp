@@ -1,7 +1,10 @@
+#include "Lighthouse/Engine/Core/Types.hpp"
+#include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
+#include "Lighthouse/Engine/Rendering/Graph/SimpleRenderGraphAllocator.hpp"
 #include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
-#include "Lighthouse/Engine/Rendering/RenderGraph.hpp"
 #include "Lighthouse/Engine/Rendering/RenderScene.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTechnique.hpp"
+#include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include "Lighthouse/Engine/Rendering/SwapchainTechniques.hpp"
 #include "Lighthouse/Engine/Rendering/WorldRenderTechnique.hpp"
 #include <Lighthouse/Engine/Engine.hpp>
@@ -17,14 +20,16 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
-
-class EESGApplication final : public Lighthouse::Application {
+using namespace Lighthouse;
+class EESGApplication final : public Application {
 public:
   void OnStart() override {
+    m_allocator = std::make_unique<SimpleRenderGraphAllocator>(
+        *GetRenderer().GetRenderDevice());
     auto &scene = CreateScene("Main");
     auto camera = scene.CreateEntity("Camera");
-    camera.Add<Lighthouse::Transform>();
-    camera.Add<Lighthouse::Camera>(Lighthouse::Camera{70.0f});
+    camera.Add<Transform>();
+    camera.Add<Camera>(Camera{70.0f});
     scene.SetActiveCamera(camera);
 
     const auto windowHandle = GetWindowManager().CreateWindow({
@@ -36,38 +41,35 @@ public:
     auto *window = GetWindowManager().GetWindow(windowHandle);
     window->Show();
 
-    Lighthouse::RenderViewDesc description;
+    RenderViewDesc description;
     description.scene = scene.Handle();
-    description.camera = Lighthouse::CameraSource{camera};
+    description.camera = CameraSource{camera};
 
-    m_windowView = GetRenderer().CreateView<Lighthouse::WindowView>(
-        windowHandle, description);
-    auto *view = GetRenderer().GetView<Lighthouse::WindowView>(m_windowView);
-    const auto acquire =
-        view->AddTechnique<Lighthouse::AcquireSwapchainImageTechnique>();
-    const auto worldRender =
-        view->AddTechnique<Lighthouse::WorldRenderTechnique>();
+    m_windowView =
+        GetRenderer().CreateView<WindowView>(windowHandle, description);
+    auto *view = GetRenderer().GetView<WindowView>(m_windowView);
+    const auto acquire = view->AddTechnique<AcquireSwapchainImageTechnique>();
+    const auto worldRender = view->AddTechnique<WorldRenderTechnique>();
     // const auto clear = view->AddTechnique<ClearSwapchainTechnique>(acquire);
 
 #ifdef LIGHTHOUSE_IMGUI
-    m_imgui = std::make_shared<Lighthouse::ImGuiSession>(*window);
-    const auto imgui =
-        view->AddTechnique<Lighthouse::ImGuiTechnique>(m_imgui, [] {
-          ImGui::ShowDemoWindow();
-          ImPlot::ShowDemoWindow();
-        });
-    //view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(imgui);
+    m_imgui = std::make_shared<ImGuiSession>(*window);
+    const auto imgui = view->AddTechnique<ImGuiTechnique>(m_imgui, [] {
+      ImGui::ShowDemoWindow();
+      ImPlot::ShowDemoWindow();
+    });
+    // view->AddTechnique<PresentSwapchainImageTechnique>(imgui);
 #else
-    //view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(acquire);
+    // view->AddTechnique<PresentSwapchainImageTechnique>(acquire);
 #endif
 
-    view->AddLambdaTechnique([&](Lighthouse::TechniqueBuildContext &ctx) {
+    view->AddLambdaTechnique([&](TechniqueBuildContext &ctx) {
       struct CompositeData {
-        Lighthouse::RenderGraphResource color;
+        RenderGraphResource color;
       };
       auto &builder = ctx.graph.AddPass<CompositeData>(
           "composite",
-          [&](Lighthouse::RenderGraph::Builder &builder, CompositeData &data) {
+          [&](RenderGraph::Builder &builder, CompositeData &data) {
             builder.Read(view->GetTechnique(imgui)->GetPassData().image);
             builder.Read(view->GetTechnique(worldRender)
                              ->GetWorldRenderPassData()
@@ -75,9 +77,32 @@ public:
             data.color =
                 builder.Write(view->GetTechnique(acquire)->GetPassData().image);
           },
-          [](const CompositeData &data, FrameGraphPassResources &,
-             Lighthouse::IRenderCommandList &device) {
+          [&ctx, worldRender, view](const CompositeData &data,
+                                    FrameGraphPassResources &resources,
+                                    IRenderCommandList &cmdList) {
+            const auto &worldColor =
+                view->GetTechnique(worldRender)->GetWorldRenderPassData().color;
 
+            RenderGraphImage::Desc worldColorDesc =
+                resources.getDescriptor<RenderGraphImage>(worldColor);
+            ImportedRenderGraphImage::Desc acquireDesc =
+                resources.getDescriptor<ImportedRenderGraphImage>(data.color);
+            const RenderGraphImage &worldColorImage =
+                resources.get<RenderGraphImage>(worldColor);
+            const ImportedRenderGraphImage &acquireImageResource =
+                resources.get<ImportedRenderGraphImage>(data.color);
+
+            BlitRegion region{
+                .srcSubresource = {ImageAspect::Color, 0, 0, 1},
+                .srcOffsets = {{{0, 0, 0},
+                                {worldColorDesc.width, worldColorDesc.height,
+                                 1}}},
+                .dstSubresource = {ImageAspect::Color, 0, 0, 1},
+                .dstOffsets = {
+                    {{0, 0, 0}, {acquireDesc.width, acquireDesc.height, 1}}}};
+            ImageFilter filter = ImageFilter::Nearest;
+            cmdList.BlitImage(worldColorImage.handle,
+                              acquireImageResource.handle, region, filter);
           });
     });
 
@@ -85,26 +110,24 @@ public:
     std::cout << m_graph->Dot() << std::endl;
   }
 
-  void OnUpdate(float) override {
-    if (auto *device = GetRenderer().GetRenderDevice(); device && m_graph)
-      m_graph->Execute(*device);
-  }
+  void OnUpdate(float) override { m_graph->Execute(*m_allocator); }
 
 private:
-  Lighthouse::RenderViewHandle m_windowView;
+  RenderViewHandle m_windowView;
 #ifdef LIGHTHOUSE_IMGUI
-  std::shared_ptr<Lighthouse::ImGuiSession> m_imgui;
+  std::shared_ptr<ImGuiSession> m_imgui;
 #endif
-  std::optional<Lighthouse::RenderGraph> m_graph;
-  Lighthouse::RenderScene m_scene;
+  std::optional<RenderGraph> m_graph;
+  std::unique_ptr<SimpleRenderGraphAllocator> m_allocator;
+  RenderScene m_scene;
 };
 
 int main() {
-  Lighthouse::Config config{
+  Config config{
       .name = "EESG",
-      .graphics = {.selection = Lighthouse::BackendSelection::FirstAvailable},
+      .graphics = {.selection = BackendSelection::FirstAvailable},
   };
-  config.AddBackend<Lighthouse::OpenGLBackend>();
-  config.AddBackend<Lighthouse::VulkanBackend>();
-  return Lighthouse::Run<EESGApplication>(config);
+  config.AddBackend<OpenGLBackend>();
+  config.AddBackend<VulkanBackend>();
+  return Run<EESGApplication>(config);
 }
