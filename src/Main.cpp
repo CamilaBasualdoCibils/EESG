@@ -1,8 +1,10 @@
+#include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
+#include "Lighthouse/Engine/Rendering/RenderGraph.hpp"
 #include "Lighthouse/Engine/Rendering/RenderScene.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTechnique.hpp"
-#include "Lighthouse/Engine/Rendering/WorldRenderer.hpp"
+#include "Lighthouse/Engine/Rendering/SwapchainTechniques.hpp"
+#include "Lighthouse/Engine/Rendering/WorldRenderTechnique.hpp"
 #include <Lighthouse/Engine/Engine.hpp>
-#include <Lighthouse/Engine/Rendering/SwapchainTechniques.hpp>
 #include <Lighthouse/OpenGL/OpenGLBackend.hpp>
 #include <Lighthouse/Vulkan/VulkanBackend.hpp>
 #include <implot.h>
@@ -15,55 +17,6 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
-
-class ClearSwapchainTechnique final : public Lighthouse::IRenderTechnique {
-public:
-  struct PassData {
-    Lighthouse::GraphImageHandle image{Lighthouse::InvalidGraphImage};
-  };
-
-  explicit ClearSwapchainTechnique(
-      Lighthouse::TechniqueRef<Lighthouse::AcquireSwapchainImageTechnique>
-          source)
-      : m_source(source) {}
-
-  const PassData &GetPassData() const noexcept { return m_passData; }
-
-  void BuildGraph(Lighthouse::TechniqueBuildContext &ctx) override {
-    const auto target = ctx.GetTechnique(m_source).GetPassData().image;
-    if (target == Lighthouse::InvalidGraphImage)
-      throw std::logic_error("Clear pass requires an acquired swapchain image");
-
-    m_passData = ctx.graph.AddPass<PassData>(
-        "clear window",
-        [target](Lighthouse::RenderGraph::Builder &builder, PassData &data) {
-          data.image = builder.Write(target);
-        },
-        [](const PassData &data, FrameGraphPassResources &resources,
-           Lighthouse::IRenderDevice &device) {
-          const auto &image =
-              resources.get<Lighthouse::ImportedRenderGraphImage>(data.image);
-          const auto &desc =
-              resources.getDescriptor<Lighthouse::ImportedRenderGraphImage>(
-                  data.image);
-          auto commands =
-              device.CreateCommandList(Lighthouse::QueueType::Graphics);
-          Lighthouse::RenderPassDesc pass;
-          pass.colorAttachment = image.view;
-          pass.width = desc.width;
-          pass.height = desc.height;
-          pass.clearColor = true;
-          pass.clearColorValue = {0.12f, 0.14f, 0.18f};
-          commands->BeginRendering(pass);
-          commands->EndRendering();
-          device.Submit(*commands);
-        });
-  }
-
-private:
-  Lighthouse::TechniqueRef<Lighthouse::AcquireSwapchainImageTechnique> m_source;
-  PassData m_passData;
-};
 
 class EESGApplication final : public Lighthouse::Application {
 public:
@@ -90,27 +43,46 @@ public:
     m_windowView = GetRenderer().CreateView<Lighthouse::WindowView>(
         windowHandle, description);
     auto *view = GetRenderer().GetView<Lighthouse::WindowView>(m_windowView);
-
     const auto acquire =
         view->AddTechnique<Lighthouse::AcquireSwapchainImageTechnique>();
     const auto worldRender =
-        view->AddTechnique<Lighthouse::WorldRenderTechnique>(
-            m_deferredWorldRenderer, &m_scene,Lighthouse::TechniqueRef<>);
+        view->AddTechnique<Lighthouse::WorldRenderTechnique>();
     // const auto clear = view->AddTechnique<ClearSwapchainTechnique>(acquire);
 
 #ifdef LIGHTHOUSE_IMGUI
     m_imgui = std::make_shared<Lighthouse::ImGuiSession>(*window);
     const auto imgui =
-        view->AddTechnique<Lighthouse::ImGuiTechnique>(m_imgui, acquire, [] {
+        view->AddTechnique<Lighthouse::ImGuiTechnique>(m_imgui, [] {
           ImGui::ShowDemoWindow();
           ImPlot::ShowDemoWindow();
         });
-    view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(imgui);
+    //view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(imgui);
 #else
-    view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(acquire);
+    //view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(acquire);
 #endif
 
+    view->AddLambdaTechnique([&](Lighthouse::TechniqueBuildContext &ctx) {
+      struct CompositeData {
+        Lighthouse::RenderGraphResource color;
+      };
+      auto &builder = ctx.graph.AddPass<CompositeData>(
+          "composite",
+          [&](Lighthouse::RenderGraph::Builder &builder, CompositeData &data) {
+            builder.Read(view->GetTechnique(imgui)->GetPassData().image);
+            builder.Read(view->GetTechnique(worldRender)
+                             ->GetWorldRenderPassData()
+                             .color);
+            data.color =
+                builder.Write(view->GetTechnique(acquire)->GetPassData().image);
+          },
+          [](const CompositeData &data, FrameGraphPassResources &,
+             Lighthouse::IRenderCommandList &device) {
+
+          });
+    });
+
     m_graph.emplace(GetRenderer().Compile({m_windowView}));
+    std::cout << m_graph->Dot() << std::endl;
   }
 
   void OnUpdate(float) override {
@@ -123,7 +95,6 @@ private:
 #ifdef LIGHTHOUSE_IMGUI
   std::shared_ptr<Lighthouse::ImGuiSession> m_imgui;
 #endif
-  Lighthouse::DeferredWorldRenderer m_deferredWorldRenderer;
   std::optional<Lighthouse::RenderGraph> m_graph;
   Lighthouse::RenderScene m_scene;
 };
