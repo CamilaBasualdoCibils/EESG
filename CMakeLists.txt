@@ -15,6 +15,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(EESG_ENABLE_IMGUI "Build the application with Dear ImGui enabled" ON)
+option(EESG_ENABLE_TRACY "Build the application with Tracy profiler enabled" ON)
 option(EESG_BUILD_TESTING "Build Lighthouse tests" OFF)
 
 set(BUILD_TESTING ${EESG_BUILD_TESTING} CACHE BOOL "Build tests" FORCE)
@@ -27,6 +28,7 @@ set(LIGHTHOUSE_IMGUI ${EESG_ENABLE_IMGUI} CACHE BOOL "Enable Dear ImGui and ImPl
 set(LIGHTHOUSE_BUILD_EXAMPLES OFF CACHE BOOL "Build Lighthouse examples" FORCE)
 set(LIGHTHOUSE_BUILD_OPENGL_BACKEND ON CACHE BOOL "Build the OpenGL backend" FORCE)
 set(LIGHTHOUSE_BUILD_VULKAN_BACKEND ON CACHE BOOL "Build the Vulkan backend" FORCE)
+set(LIGHTHOUSE_ENABLE_TRACY ${EESG_ENABLE_TRACY} CACHE BOOL "Enable Tracy profiler" FORCE)
 
 add_subdirectory(extern/Lighthouse-Engine)
 

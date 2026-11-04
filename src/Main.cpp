@@ -5,6 +5,7 @@
 #include "Lighthouse/Engine/Rendering/RenderScene.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTechnique.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
+#include "Lighthouse/Engine/Rendering/RenderView.hpp"
 #include "Lighthouse/Engine/Rendering/SwapchainTechniques.hpp"
 #include "Lighthouse/Engine/Rendering/WorldRenderTechnique.hpp"
 #include <Lighthouse/Engine/Engine.hpp>
@@ -108,9 +109,21 @@ public:
 
     m_graph.emplace(GetRenderer().Compile({m_windowView}));
     std::cout << m_graph->Dot() << std::endl;
+    m_commandList = GetRenderer().GetRenderDevice()->CreateCommandList(QueueType::Graphics);
   }
 
-  void OnUpdate(float) override { m_graph->Execute(*m_allocator); }
+  void OnUpdate(float) override { 
+    
+    RenderGraphExecuteContext ctx{
+        .allocator = m_allocator.get(),
+        .commandList = m_commandList.get()
+    };
+    m_commandList->Clear();
+    m_graph->Execute(&ctx);
+    GetRenderer().GetRenderDevice()->Submit(*m_commandList.get());
+    GetRenderer().GetRenderDevice()->Present(GetRenderer().GetView<WindowView>(m_windowView)->swapchain);
+
+ }
 
 private:
   RenderViewHandle m_windowView;
@@ -119,6 +132,7 @@ private:
 #endif
   std::optional<RenderGraph> m_graph;
   std::unique_ptr<SimpleRenderGraphAllocator> m_allocator;
+  std::unique_ptr<IRenderCommandList> m_commandList;
   RenderScene m_scene;
 };
 

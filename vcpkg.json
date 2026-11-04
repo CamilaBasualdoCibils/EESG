@@ -64,6 +64,8 @@
     "glslang",
     "spirv-cross",
     "libevdev",
-    "msquic"
+    "msquic",
+    "mimalloc",
+    "tracy"
   ]
 }
