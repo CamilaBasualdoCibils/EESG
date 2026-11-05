@@ -29,22 +29,19 @@ public:
     camera.Add<Camera>(Camera{70.0f});
     scene.SetActiveCamera(camera);
 
-    const auto windowHandle = GetWindowManager().CreateWindow({
-        .title = "EESG",
-        .width = 1280,
-        .height = 720,
-        .eglSurface = true,
-    });
-    auto *window = GetWindowManager().GetWindow(windowHandle);
-    window->Show();
-
     RenderViewDesc description;
     description.scene = scene.Handle();
     description.camera = CameraSource{camera};
 
     m_windowView =
-        GetRenderer().CreateView<WindowView>(windowHandle, description);
+        GetRenderer().CreateView<WindowView>(RenderWindowDesc{
+            .title = "EESG",
+            .width = 1280,
+            .height = 720,
+            .decorated = true,
+        }, description);
     auto *view = GetRenderer().GetView<WindowView>(m_windowView);
+    auto *window = view->GetWindow();
     const auto worldRender = view->AddTechnique<WorldRenderTechnique>();
     // const auto clear = view->AddTechnique<ClearSwapchainTechnique>(acquire);
 
