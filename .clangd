@@ -1,0 +1,10 @@
+CompileFlags:
+  CompilationDatabase: build
+
+---
+If:
+  PathMatch: extern/Lighthouse-Engine/include/.*
+CompileFlags:
+  # Headers may inherit a VISR command without Lighthouse's public include path.
+  # Compile commands run from the build directory selected above.
+  Add: [-I../extern/Lighthouse-Engine/include]

@@ -1,5 +1,4 @@
 #include "World/World.hpp"
-#include "World/Entity.hpp"
 
 #include <stdexcept>
 #include <atomic>
@@ -14,11 +13,11 @@ std::uint32_t NextWorldIndex() {
 }
 
 World::World(std::string name)
-    : m_registry(std::make_shared<entt::registry>()), m_name(std::move(name)) {}
+    : entity_registry(std::make_shared<entt::registry>()), m_name(std::move(name)) {}
 
 Entity World::CreateEntity(std::string name) {
-    const auto entity = m_registry->create();
-    return Entity{m_registry, entity, std::move(name)};
+    const auto entity = entity_registry->create();
+    return Entity{entity_registry, entity, std::move(name)};
 }
 
 const std::string& World::Name() const {

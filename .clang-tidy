@@ -1,0 +1,19 @@
+---
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -clang-analyzer-optin.core.EnumCastOutOfRange,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-empty-catch,
+  -bugprone-exception-escape,
+  -bugprone-reserved-identifier,
+  -bugprone-std-namespace-modification,
+  -bugprone-throwing-static-initialization,
+  -portability-avoid-pragma-once
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(^|.*/)(include|src|tests|examples|dev)/'
+SystemHeaders: false
+FormatStyle: file

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "World/Entity.hpp"
-#include "Lighthouse.hpp"
+#include "Math/Types.hpp"
+#include "World/Entity/Entity.hpp"
+
 
 namespace EESG {
 
