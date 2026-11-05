@@ -31,15 +31,8 @@ public:
     });
     auto *view = GetRenderer().GetView<WindowView>(m_windowView);
 
-        m_windowView2 = GetRenderer().CreateView<WindowView>(RenderWindowDesc{
-        .title = "EESG2",
-        .width = 1280,
-        .height = 720,
-        .decorated = true,
-    });
-    auto *view2 = GetRenderer().GetView<WindowView>(m_windowView2);
 
-    const auto worldRender = view->AddTechnique<WorldRenderTechnique>();
+    const auto worldRender = GetRenderer().AddTechnique<WorldRenderTechnique>();
 
 #ifdef LIGHTHOUSE_IMGUI
     m_imguiView = GetRenderer().CreateView<ImGuiView>([] {
@@ -48,23 +41,23 @@ public:
     });
 #endif
 
-    view->AddLambdaTechnique([view,view2, worldRender](TechniqueBuildContext &ctx) {
+    GetRenderer().AddLambdaTechnique([this, view,
+                                      worldRender](TechniqueBuildContext &ctx) {
       struct CompositeData {
         RenderGraphResource source;
-        RenderGraphResource color,color2;
+        RenderGraphResource color;
       };
       ctx.graph.AddPass<CompositeData>(
           "composite",
-          [view,view2, worldRender](RenderGraph::Builder &builder,
-                              CompositeData &data) {
-            data.source = builder.Read(view->GetTechnique(worldRender)
+          [this, view, worldRender](RenderGraph::Builder &builder,
+                                    CompositeData &data) {
+            data.source = builder.Read(GetRenderer()
+                                           .GetTechnique(worldRender)
                                            ->GetWorldRenderPassData()
                                            .color);
             data.color = builder.Write(view->GetAcquiredImageAsRGResource());
-                                data.color2 = builder.Write(view2->GetAcquiredImageAsRGResource());
-            
           },
-          [view, view2](const CompositeData &data, FrameGraphPassResources &resources,
+          [view](const CompositeData &data, FrameGraphPassResources &resources,
                  RenderGraphExecutePassContext &context) {
             const auto &source = resources.get<RenderGraphImage>(data.source);
             const auto &desc =
@@ -89,7 +82,6 @@ public:
 
 private:
   RenderViewHandle m_windowView;
-  RenderViewHandle m_windowView2;
 #ifdef LIGHTHOUSE_IMGUI
   RenderViewHandle m_imguiView;
 #endif
