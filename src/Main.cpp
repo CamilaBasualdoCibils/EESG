@@ -1,12 +1,11 @@
 #include "Lighthouse/Engine/Core/Types.hpp"
+#include "Lighthouse/Engine/Rendering/Graph/IRenderGraphAllocator.hpp"
 #include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
-#include "Lighthouse/Engine/Rendering/Graph/SimpleRenderGraphAllocator.hpp"
 #include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
 #include "Lighthouse/Engine/Rendering/RenderScene.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTechnique.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include "Lighthouse/Engine/Rendering/RenderView.hpp"
-#include "Lighthouse/Engine/Rendering/SwapchainTechniques.hpp"
 #include "Lighthouse/Engine/Rendering/WorldRenderTechnique.hpp"
 #include <Lighthouse/Engine/Engine.hpp>
 #include <Lighthouse/OpenGL/OpenGLBackend.hpp>
@@ -20,13 +19,10 @@
 
 #include <memory>
 #include <optional>
-#include <stdexcept>
 using namespace Lighthouse;
 class EESGApplication final : public Application {
 public:
   void OnStart() override {
-    m_allocator = std::make_unique<SimpleRenderGraphAllocator>(
-        *GetRenderer().GetRenderDevice());
     auto &scene = CreateScene("Main");
     auto camera = scene.CreateEntity("Camera");
     camera.Add<Transform>();
@@ -49,7 +45,6 @@ public:
     m_windowView =
         GetRenderer().CreateView<WindowView>(windowHandle, description);
     auto *view = GetRenderer().GetView<WindowView>(m_windowView);
-    const auto acquire = view->AddTechnique<AcquireSwapchainImageTechnique>();
     const auto worldRender = view->AddTechnique<WorldRenderTechnique>();
     // const auto clear = view->AddTechnique<ClearSwapchainTechnique>(acquire);
 
@@ -75,55 +70,45 @@ public:
             builder.Read(view->GetTechnique(worldRender)
                              ->GetWorldRenderPassData()
                              .color);
-            data.color =
-                builder.Write(view->GetTechnique(acquire)->GetPassData().image);
+            data.color = builder.Write(view->GetAcquiredImageAsRGResource());
           },
-          [&ctx, worldRender, view](const CompositeData &data,
+          [&ctx, worldRender, view,imgui](const CompositeData &data,
                                     FrameGraphPassResources &resources,
-                                    IRenderCommandList &cmdList) {
+                                    RenderGraphExecutePassContext &context) {
             const auto &worldColor =
                 view->GetTechnique(worldRender)->GetWorldRenderPassData().color;
 
-            RenderGraphImage::Desc worldColorDesc =
-                resources.getDescriptor<RenderGraphImage>(worldColor);
-            ImportedRenderGraphImage::Desc acquireDesc =
-                resources.getDescriptor<ImportedRenderGraphImage>(data.color);
-            const RenderGraphImage &worldColorImage =
-                resources.get<RenderGraphImage>(worldColor);
-            const ImportedRenderGraphImage &acquireImageResource =
-                resources.get<ImportedRenderGraphImage>(data.color);
+           /*  RenderGraphImage::Desc worldColorDesc =
+                resources.getDescriptor<RenderGraphImage>(worldColor); */
+            ImportedWindowView::Desc acquireDesc =
+                resources.getDescriptor<ImportedWindowView>(data.color);
+    /*         const RenderGraphImage &worldColorImage =
+                resources.get<RenderGraphImage>(worldColor); */
+                const auto imguiRGImage = view->GetTechnique(imgui)->GetPassData().image;
+            const ImportedWindowView &acquireImageResource =
+                resources.get<ImportedWindowView>(data.color);
+                const RenderGraphImage imguiImage = resources.get<RenderGraphImage>(imguiRGImage);
+                const RenderGraphImage::Desc imguiDesc = resources.getDescriptor<RenderGraphImage>(imguiRGImage);
 
             BlitRegion region{
                 .srcSubresource = {ImageAspect::Color, 0, 0, 1},
                 .srcOffsets = {{{0, 0, 0},
-                                {worldColorDesc.width, worldColorDesc.height,
+                                {imguiDesc.width, imguiDesc.height,
                                  1}}},
                 .dstSubresource = {ImageAspect::Color, 0, 0, 1},
                 .dstOffsets = {
-                    {{0, 0, 0}, {acquireDesc.width, acquireDesc.height, 1}}}};
+                    {{0, 0, 0}, {1280, 720, 1}}}};
             ImageFilter filter = ImageFilter::Nearest;
-            cmdList.BlitImage(worldColorImage.handle,
-                              acquireImageResource.handle, region, filter);
+            context.commandList->BlitImage(imguiImage.handle,
+                                           acquireImageResource.currentImage, region, filter);
           });
     });
 
-    m_graph.emplace(GetRenderer().Compile({m_windowView}));
-    std::cout << m_graph->Dot() << std::endl;
-    m_commandList = GetRenderer().GetRenderDevice()->CreateCommandList(QueueType::Graphics);
+    GetRenderer().Compile();
+    std::cout << GetRenderer().GetRenderGraph().Dot() << std::endl;
   }
 
-  void OnUpdate(float) override { 
-    
-    RenderGraphExecuteContext ctx{
-        .allocator = m_allocator.get(),
-        .commandList = m_commandList.get()
-    };
-    m_commandList->Clear();
-    m_graph->Execute(&ctx);
-    GetRenderer().GetRenderDevice()->Submit(*m_commandList.get());
-    GetRenderer().GetRenderDevice()->Present(GetRenderer().GetView<WindowView>(m_windowView)->swapchain);
-
- }
+  void OnUpdate(float) override { GetRenderer().Render(); }
 
 private:
   RenderViewHandle m_windowView;
@@ -131,8 +116,7 @@ private:
   std::shared_ptr<ImGuiSession> m_imgui;
 #endif
   std::optional<RenderGraph> m_graph;
-  std::unique_ptr<SimpleRenderGraphAllocator> m_allocator;
-  std::unique_ptr<IRenderCommandList> m_commandList;
+
   RenderScene m_scene;
 };
 
