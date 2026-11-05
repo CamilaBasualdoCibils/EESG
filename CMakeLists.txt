@@ -31,7 +31,12 @@ set(LIGHTHOUSE_ENABLE_TRACY ${EESG_ENABLE_TRACY} CACHE BOOL "Enable Tracy profil
 
 add_subdirectory(extern/Lighthouse-Engine)
 
-add_executable(EESG src/Main.cpp)
+file(GLOB_RECURSE _EESG_sources CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
+
+add_executable(EESG ${_EESG_sources})
+target_include_directories(EESG PRIVATE src)
 target_link_libraries(EESG PRIVATE
     Lighthouse::Engine
     Lighthouse::OpenGLBackend

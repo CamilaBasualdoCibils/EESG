@@ -6,6 +6,8 @@
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include "Lighthouse/Engine/Rendering/RenderView.hpp"
 #include "Lighthouse/Engine/Rendering/WorldRenderTechnique.hpp"
+#include "World/Transform.hpp"
+#include "World/World.hpp"
 #include <Lighthouse/Engine/Engine.hpp>
 #include <Lighthouse/OpenGL/OpenGLBackend.hpp>
 #include <Lighthouse/Vulkan/VulkanBackend.hpp>
@@ -19,7 +21,8 @@
 #include <memory>
 #include <optional>
 using namespace Lighthouse;
-class EESGApplication final : public Application {
+namespace EESG {
+class EESGApplication final : public IApplication {
 public:
   void OnStart() override {
 
@@ -30,7 +33,6 @@ public:
         .decorated = true,
     });
     auto *view = GetRenderer().GetView<WindowView>(m_windowView);
-
 
     const auto worldRender = GetRenderer().AddTechnique<WorldRenderTechnique>();
 
@@ -76,6 +78,10 @@ public:
 
     GetRenderer().Compile();
     std::cout << GetRenderer().GetRenderGraph().Dot() << std::endl;
+
+    World world("MainWorld");
+    auto camera = world.CreateEntity("Camera");
+    Transform &transform = camera.Add<Transform>();
   }
 
   void OnUpdate(float) override { GetRenderer().Render(); }
@@ -87,6 +93,7 @@ private:
 #endif
   std::optional<RenderGraph> m_graph;
 };
+} // namespace EESG
 
 int main() {
   Config config{
@@ -95,5 +102,5 @@ int main() {
   };
   config.AddBackend<OpenGLBackend>();
   config.AddBackend<VulkanBackend>();
-  return Run<EESGApplication>(config);
+  return Run<EESG::EESGApplication>(config);
 }
