@@ -1,0 +1,51 @@
+--- a/backends/imgui_impl_vulkan.cpp
++++ b/backends/imgui_impl_vulkan.cpp
+@@ -1958,20 +1958,24 @@
+     err = vkBeginCommandBuffer(command_buffer, &begin_info);
+     check_vk_result(err);
+ 
+-    // Transition the images to the correct layout for rendering
+-    for (uint32_t i = 0; i < wd->ImageCount; i++)
+-    {
+-        VkImageMemoryBarrier barrier = {};
+-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+-        barrier.image = wd->Frames[i].Backbuffer;
+-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+-        barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+-        barrier.subresourceRange.levelCount = 1;
+-        barrier.subresourceRange.layerCount = 1;
+-        vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
++    // Dynamic rendering discards and transitions only the acquired image below.
++    if (!wd->UseDynamicRendering)
++    {
++        // Transition the images to the correct layout for rendering
++        for (uint32_t i = 0; i < wd->ImageCount; i++)
++        {
++            VkImageMemoryBarrier barrier = {};
++            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++            barrier.image = wd->Frames[i].Backbuffer;
++            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++            barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
++            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++            barrier.subresourceRange.levelCount = 1;
++            barrier.subresourceRange.layerCount = 1;
++            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
++        }
+     }
+ 
+     err = vkEndCommandBuffer(command_buffer);
+@@ -2230,7 +2234,8 @@
+             VkImageMemoryBarrier barrier = {};
+             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+             barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+-            barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
++            // This viewport clears every frame, so previous contents are discarded.
++            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+             barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+             barrier.image = fd->Backbuffer;
+             barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;

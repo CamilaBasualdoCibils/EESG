@@ -56,7 +56,7 @@ public:
     dragon.Add<MeshRender>(meshHandle);
     m_worldRenderer =
         renderer
-            .AddTechnique<WorldRenderer>(&renderer, &m_world, UVec2{640, 360})
+            .AddTechnique<WorldRenderer>(&renderer, &m_world, UVec2{1280, 720})
             .handle;
     renderer.AddLambdaTechnique(
         [this](Lighthouse::TechniqueBuildContext& context)
@@ -192,7 +192,7 @@ int main()
   Lighthouse::Config config{
       .name = "EESG",
       .graphics = {.selection = Lighthouse::BackendSelection::FirstAvailable}};
-  config.AddBackend<Lighthouse::OpenGLBackend>();
-  config.AddBackend<Lighthouse::VulkanBackend>();
+      config.AddBackend<Lighthouse::VulkanBackend>();
+      config.AddBackend<Lighthouse::OpenGLBackend>();
   return Run<EESG::EESGApplication>(config);
 }

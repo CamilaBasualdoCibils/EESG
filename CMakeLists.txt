@@ -42,3 +42,13 @@ target_link_libraries(EESG PRIVATE
     Lighthouse::OpenGLBackend
     Lighthouse::VulkanBackend
 )
+
+if(EESG_BUILD_TESTING)
+    find_package(GTest CONFIG REQUIRED)
+    add_executable(EESGBackendTests tests/BackendDeviceTests.cpp tests/ImGuiViewportTests.cpp
+        extern/Lighthouse-Engine/Tests/GraphicsBackendTests.cpp)
+    target_link_libraries(EESGBackendTests PRIVATE Lighthouse::OpenGLBackend
+        Lighthouse::VulkanBackend GTest::gtest_main)
+    include(GoogleTest)
+    gtest_discover_tests(EESGBackendTests)
+endif()

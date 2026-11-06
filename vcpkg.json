@@ -66,6 +66,15 @@
     "libevdev",
     "msquic",
     "mimalloc",
-    "tracy"
+    "tracy",
+    {
+      "name": "vulkan-loader",
+      "features": [
+        "xcb",
+        "xlib",
+        "wayland"
+      ],
+      "platform": "linux"
+    }
   ]
 }
