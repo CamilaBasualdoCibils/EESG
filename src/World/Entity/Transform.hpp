@@ -2,13 +2,15 @@
 
 #include "Math/Types.hpp"
 #include "World/Entity/Entity.hpp"
+#include <glm/gtc/matrix_transform.hpp>
+#include <optional>
 
 
 namespace EESG {
 
 class Transform {
     Vec3 position{};
-    Quat rotation{};
+    Quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
     Vec3 scale{1.0f, 1.0f, 1.0f};
     mutable bool matrixDirty = true;
     mutable std::optional<Mat4> matrix;
