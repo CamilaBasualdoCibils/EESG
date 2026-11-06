@@ -14,20 +14,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(LIGHTHOUSE_IMGUI "Build ImGui views and use GLFW X11/XWayland (OFF selects Wayland)" ON)
-option(EESG_ENABLE_TRACY "Build the application with Tracy profiler enabled" ON)
-option(EESG_BUILD_TESTING "Build Lighthouse tests" OFF)
-
-set(BUILD_TESTING ${EESG_BUILD_TESTING} CACHE BOOL "Build tests" FORCE)
-set(OPENPERIPHERAL_BUILD_TESTS OFF CACHE BOOL "Build OpenPeripherals tests" FORCE)
-set(OPENPERIPHERAL_BUILD_TOOLS OFF CACHE BOOL "Build OpenPeripherals tools" FORCE)
-set(OPENPERIPHERAL_BUILD_EXAMPLES OFF CACHE BOOL "Build OpenPeripherals examples" FORCE)
-set(VISR_BUILD_TESTS OFF CACHE BOOL "Build VISR tests" FORCE)
-set(VISR_BUILD_TOOLS OFF CACHE BOOL "Build VISR tools" FORCE)
-set(LIGHTHOUSE_BUILD_EXAMPLES OFF CACHE BOOL "Build Lighthouse examples" FORCE)
-set(LIGHTHOUSE_BUILD_OPENGL_BACKEND ON CACHE BOOL "Build the OpenGL backend" FORCE)
-set(LIGHTHOUSE_BUILD_VULKAN_BACKEND ON CACHE BOOL "Build the Vulkan backend" FORCE)
-set(LIGHTHOUSE_ENABLE_TRACY ${EESG_ENABLE_TRACY} CACHE BOOL "Enable Tracy profiler" FORCE)
+option(EESG_BUILD_TESTING "Build EESG tests" OFF)
 
 add_subdirectory(extern/Lighthouse-Engine)
 
@@ -44,6 +31,15 @@ target_link_libraries(EESG PRIVATE
 )
 
 if(EESG_BUILD_TESTING)
+    enable_testing()
+    add_executable(EESGOctreeTests tests/AdaptiveOctreeTests.cpp)
+    target_include_directories(EESGOctreeTests PRIVATE src/Types)
+    add_test(NAME EESGOctreeTests COMMAND EESGOctreeTests)
+
+    add_executable(EESGWorldTerrainTests tests/WorldTerrainTests.cpp)
+    target_include_directories(EESGWorldTerrainTests PRIVATE src)
+    add_test(NAME EESGWorldTerrainTests COMMAND EESGWorldTerrainTests)
+
     find_package(GTest CONFIG REQUIRED)
     add_executable(EESGBackendTests tests/BackendDeviceTests.cpp tests/ImGuiViewportTests.cpp
         extern/Lighthouse-Engine/Tests/GraphicsBackendTests.cpp)

@@ -1,3 +1,4 @@
+#include "Lighthouse/Engine/Core/Application.hpp"
 #include "Math/Types.hpp"
 #include "World/Entity/Transform.hpp"
 #include "World/WorldRenderer.hpp"
@@ -18,7 +19,7 @@
 
 namespace EESG
 {
-class EESGApplication final : public Lighthouse::Application
+class EESGApplication final : public Lighthouse::IApplication
 {
 public:
   ~EESGApplication() override

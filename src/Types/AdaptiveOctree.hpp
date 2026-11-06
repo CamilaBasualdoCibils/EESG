@@ -1,292 +1,449 @@
 #pragma once
-#include "AABB.hpp"
-#include "MortonOrdering.hpp"
 
-#include "Types.hpp"
-#include "pch.hpp"
-#include <algorithm>
-#include <bitset>
-#include <optional>
-#include <stack>
-#include <variant>
-namespace Lighthouse {
-template <uint32_t TreeDepth, typename LeafData = void,
-          typename BranchData = void>
-class Octree {
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <span>
+#include <stdexcept>
+#include <type_traits>
+#include <vector>
+
+namespace EESG {
+
+// No payload buffer is allocated for this type.
+struct NoOctreePayload {};
+
+// A terrain region is either absent, a uniform terminal region, or a branch.
+// The topology is independent of the terrain representation: a terminal payload
+// may hold density/material values or an index into an application brick
+// buffer.
+template <class Cell, class Summary = NoOctreePayload> class AdaptiveOctree {
+  template <class T>
+  static constexpr bool validPayload =
+      std::is_trivially_copyable_v<T> &&
+      std::is_nothrow_default_constructible_v<T> &&
+      std::is_nothrow_copy_constructible_v<T> &&
+      std::is_nothrow_copy_assignable_v<T>;
+  static_assert(
+      validPayload<Cell> && validPayload<Summary>,
+      "Terrain payloads must be trivial, with nonthrowing value operations");
+
 public:
-  using MortonIndexType =
-      typename std::conditional<TreeDepth <= 10, uint32_t, uint64_t>::type;
-  using VoxelPosition = uint32_t;
-  using LeafDataType = LeafData;
+  using Point = std::array<uint32_t, 3>;
+  static constexpr uint32_t null = std::numeric_limits<uint32_t>::max();
+  static constexpr uint32_t terminalBit = 1;
+  static constexpr uint32_t occupiedBit = 2;
+
+  // GPU ABI: four uints, a 16-byte structured-buffer element. Child octant k
+  // occupies childBase+k when childBits has bit k set. x/y/z use bits 0/1/2.
+  // payload addresses cells for terminals, summaries for branches. Slots
+  // lacking occupiedBit are allocator holes and must never be traversed.
+  struct GpuNode {
+    uint32_t childBase = null;
+    uint32_t payload = null;
+    uint32_t childBits = 0;
+    uint32_t tags = 0;
+  };
+  static_assert(sizeof(GpuNode) == 16 && alignof(GpuNode) == 4 &&
+                std::is_trivially_copyable_v<GpuNode> &&
+                std::is_standard_layout_v<GpuNode>);
+  static_assert(offsetof(GpuNode, payload) == 4 &&
+                offsetof(GpuNode, childBits) == 8 &&
+                offsetof(GpuNode, tags) == 12);
+
+  // CPU handles detect deletion/reuse. GPU buffers contain only indices.
+  struct Handle {
+    uint32_t index = null;
+    uint64_t version = 0;
+    bool operator==(const Handle &) const = default;
+    explicit operator bool() const { return index != null; }
+  };
+  struct Region {
+    Point origin{};
+    uint32_t depth = 0;
+  };
+  struct Entry {
+    Handle handle;
+    Region region;
+    uint32_t extent;
+    bool terminal;
+  };
+  struct Buffers {
+    std::span<const GpuNode> topology;
+    std::span<const Cell> cells;
+    std::span<const Summary> summaries;
+    uint32_t depth;
+    uint32_t root; // null when empty
+  };
+
+  // depth is a runtime terrain/chunk choice, not a C++ type parameter.
+  // Finest cells have extent 1. A depth-0 tree holds one cell.
+  explicit AdaptiveOctree(uint32_t depth) : depth_(depth) {
+    if (depth > 31)
+      throw std::invalid_argument("Octree depth must be <= 31");
+    slots_.resize(1);
+    topology_.resize(1);
+  }
+  // Handles belong to one tree instance. Disallow implicit copying/moving them
+  // into another owner; obtain a copied GPU snapshot through upload().
+  AdaptiveOctree(const AdaptiveOctree &) = delete;
+  AdaptiveOctree &operator=(const AdaptiveOctree &) = delete;
+  AdaptiveOctree(AdaptiveOctree &&) = delete;
+  AdaptiveOctree &operator=(AdaptiveOctree &&) = delete;
+
+  uint32_t depth() const noexcept { return depth_; }
+  uint32_t extent() const noexcept { return uint32_t{1} << depth_; }
+  bool empty() const noexcept { return !live(0); }
+  size_t terminal_count() const noexcept { return terminalCount_; }
+  Handle root() const noexcept { return empty() ? Handle{} : handle(0); }
+  bool contains(Handle h) const noexcept {
+    return h.index < slots_.size() && live(h.index) &&
+           h.version == slots_[h.index].version;
+  }
+  bool is_terminal(Handle h) const { return terminal(require(h)); }
+
+  // Borrowed spans: any edit may invalidate them. Upload all spans without
+  // packing out holes; all three must describe the same edit revision. The
+  // caller owns shader layout for Cell and Summary and upload synchronization.
+  Buffers upload() const noexcept {
+    return {topology_, cells_.buffer(), summaries_.buffer(), depth_,
+            empty() ? null : 0};
+  }
+
+  // Spatial query returns the covering terminal, at whatever depth it exists.
+  // Out-of-domain points and absent terrain both return an empty handle.
+  Handle find(Point p) const noexcept {
+    for (auto coordinate : p)
+      if (coordinate >= extent())
+        return {};
+    if (empty())
+      return {};
+    uint32_t index = 0;
+    for (uint32_t level = 0; !terminal(index); ++level) {
+      const auto octant = octant_at(p, level);
+      if (!(topology_[index].childBits & (1u << octant)))
+        return {};
+      index = topology_[index].childBase + octant;
+    }
+    return handle(index);
+  }
+
+  const Cell &cell(Handle h) const {
+    const auto index = require(h);
+    if (!terminal(index))
+      throw std::invalid_argument("Expected terminal terrain");
+    return cells_.at(topology_[index].payload);
+  }
+  void set_cell(Handle h, const Cell &value) {
+    const auto index = require(h);
+    if (!terminal(index))
+      throw std::invalid_argument("Expected terminal terrain");
+    cells_.at(topology_[index].payload) = value;
+  }
+  const Summary &summary(Handle h) const
+    requires(!std::is_same_v<Summary, NoOctreePayload>)
+  {
+    const auto index = require(h);
+    if (terminal(index))
+      throw std::invalid_argument("Expected terrain branch");
+    return summaries_.at(topology_[index].payload);
+  }
+  void set_summary(Handle h, const Summary &value)
+    requires(!std::is_same_v<Summary, NoOctreePayload>)
+  {
+    const auto index = require(h);
+    if (terminal(index))
+      throw std::invalid_argument("Expected terrain branch");
+    summaries_.at(topology_[index].payload) = value;
+  }
+
+  // Replace an aligned region, preserving surrounding terrain. Refinement
+  // inherits a terminal's value into all eight children. Missing regions stay
+  // absent. Ancestor summaries are application-owned, not inferred from Cell.
+  Handle paint(Region region, const Cell &value) {
+    validate(region);
+    const Cell copy = value;
+    const auto index = descend(region, true);
+    replace(index, copy);
+    return handle(index);
+  }
+
+  // Explicit LOD editing. Refine preserves this handle and all existing
+  // unrelated handles; coarsen preserves the parent handle and invalidates
+  // descendants.
+  void refine(Handle h) {
+    const auto index = require(h);
+    if (!terminal(index))
+      throw std::invalid_argument("Expected terminal terrain");
+    split(index);
+  }
+  void coarsen(Handle h, const Cell &value) {
+    const auto index = require(h);
+    const Cell copy = value;
+    replace(index, copy);
+  }
+
+  // Removing only part of a coarse terminal first refines it. Empty ancestors
+  // are pruned. Absent regions report false; stale handles throw on access.
+  bool erase(Region region) {
+    validate(region);
+    const auto index = descend(region, false);
+    if (index == null)
+      return false;
+    const auto parent = slots_[index].parent;
+    const auto octant = slots_[index].octant;
+    release(index);
+    if (parent != null) {
+      topology_[parent].childBits &= ~(1u << octant);
+      prune(parent);
+    }
+    return true;
+  }
+  void clear() noexcept {
+    if (!empty())
+      release(0);
+  }
+
+  // Depth-first traversal with spatial information computed on demand. Callback
+  // must not mutate the tree. No Morton codes or positions are stored per node.
+  template <class Visitor> void visit(Visitor &&visitor) const {
+    if (!empty())
+      traverse(0, {}, visitor);
+  }
 
 private:
-  constexpr static inline uint32_t MAX_DEPTH =
-      32; // given 2^32 is the max a uint32 coord can store
-  struct Node {
-    std::bitset<8> ChildrenSet = 0;
-    // std::array<MortonIndexType, 8> children = {0};
-    LeafData data;
-    bool HasChildAtIndex(uint32_t index) const {
-      return ChildrenSet.test(index);
-    }
-    uint8_t GetChildCount() const { return ChildrenSet.count(); }
+  struct Slot {
+    uint64_t version = 0;
+    uint32_t parent = null;
+    uint32_t depth = 0;
+    uint32_t octant = 0;
   };
-  struct custom_hash_simple {
-    auto operator()(MortonIndexType const &x) const noexcept -> uint64_t {
-      return x;
+  template <class T> struct PayloadPool {
+    std::vector<T> values;
+    std::vector<uint32_t> links;
+    uint32_t free = null;
+    uint32_t acquire(const T &value) {
+      if constexpr (std::is_same_v<T, NoOctreePayload>)
+        return null;
+      if (free != null) {
+        const auto index = free;
+        free = links[index];
+        values[index] = value;
+        return index;
+      }
+      if (values.size() >= null)
+        throw std::length_error("Terrain payload capacity");
+      // Reserve before modifying either size, so allocation failure keeps the
+      // two arrays synchronized. Geometric growth avoids quadratic appends.
+      if (links.size() == links.capacity())
+        links.reserve(links.capacity() ? links.capacity() * 2 : 8);
+      values.push_back(value);
+      links.push_back(null);
+      return static_cast<uint32_t>(values.size() - 1);
     }
-  };
-  // using NodesContainer = ankerl::unordered_dense::map<MortonIndexType, Node>;
-  //   using NodesContainer =
-  //   ankerl::unordered_dense::segmented_map<MortonIndexType,Node,custom_hash_simple>;
-  using NodesContainer = std::unordered_map<MortonIndexType, Node>;
-  // using NodesContainer = std::vector<Node>;
-  std::array<NodesContainer, TreeDepth + 1> Levels;
-
-  uint32_t SignToChildIndex(IVec3 sign) {
-    return ((sign.x >= 0) << 2) | ((sign.y >= 0) << 1) | (sign.z >= 0);
-  }
-  Vec<3, int8_t> ChildIndexToSign(uint32_t index) {
-    IVec3 sign;
-    for (int i = 0; i < 3; i++)
-      sign[i] = ((index >> (2 - i)) & 0b1) ? 1 : -1;
-    return sign;
-  }
-
-  MortonIndexType IndexFromChildPos(uvec3 ChildPos, uint32_t ChildDepth) {
-    return Morton::Regular::MortonEncodeBounded<3>(
-        ChildPos / SizeOfNodeAtDepth(ChildDepth),
-        uvec3(OctreeResolution(ChildDepth)));
-  }
-
-public:
-  Octree();
-
-  /// @brief Gets the deepest node that occupies that position
-  /// @param Position
-  /// @param Level Specify a specific level to look for
-  /// @return
-  Node &AtPositionNode(uvec3 Position, std::optional<uint32_t> Level);
-  /// @brief Get the Leaf node at a given global position of last depth
-  /// @param Position
-  /// @return
-  Node &AtPositionLeaf(uvec3 Position);
-  /// @brief Gets the node that exists at a specified level and Morton Index
-  /// @param level
-  /// @param index
-  /// @return
-  Node &AtMortonIndex(uint32_t level, MortonIndexType index);
-
-  Node &InsertLeaf(uvec3 GlobalPosition);
-  void InsertLeafs(const std::vector<uvec3> &positions);
-
-  void Clear() {
-    for (auto &level : Levels) {
-      level.clear();
-    }
-  }
-  bool empty() const { return Levels[TreeDepth].empty(); }
-  size_t LeafCount() const { return Levels[TreeDepth].size(); }
-  bool ContainLeaf(ivec3 Position) const {
-    if (!IsPosInside(Position))
-      return false;
-    uvec3 NodePosition = uvec3(0);
-    MortonIndexType morton = Morton::Regular::MortonEncodeBounded<3>(
-        uvec3(Position), uvec3(OctreeResolution()));
-    return Levels[TreeDepth].find(morton) != Levels[TreeDepth].end();
-  }
-  constexpr bool IsPosInside(ivec3 Position) const {
-    return glm::all(glm::greaterThanEqual(Position, ivec3(0))) &&
-           glm::all(glm::lessThan(
-               Position, ivec3(OctreeResolution()))); // check if position is
-                                                      // within octree bounds
-  }
-  constexpr uint32 SizeOfNodeAtDepth(uint32 depth) const {
-    return uint32(1) << (TreeDepth - depth);
-  };
-  constexpr uint32 OctreeResolution(uint32 AtDepth = TreeDepth) const {
-    return uint32(1) << AtDepth;
-  }
-  constexpr size_t AbsMaxMemoryUse() const {
-    size_t size = 0;
-    for (int i = 0; i < TreeDepth; i++) {
-      const uint32 res = OctreeResolution(i);
-      size += res * res * res * sizeof(Node);
-    }
-    return size;
-  }
-  size_t CurrentMemoryUsage() const {
-    size_t size = 0;
-    for (int i = 0; i < TreeDepth; i++) {
-      size += sizeof(Node) * Levels[i].size();
-    }
-    return size;
-  }
-  constexpr uint32 GetDepth() const { return TreeDepth; }
-
-  struct NodeData {
-    MortonIndexType mortonCode;
-    uint32 Depth;
-    uint32 NodeSizeXYZ;
-    uvec3 NodePos;
-    bool isLeaf;
-    std::variant<std::monostate, LeafData *, BranchData *> data;
-
-    template <typename J> J *GetData() const {
-      static_assert(!std::is_same_v<J, J>,
-                    "Use GetLeafData() or GetBranchData(); GetData<T>() is "
-                    "ambiguous here.");
-      return nullptr;
-    }
-
-    LeafData *GetLeafData() const {
-      return data.index() == 1 ? std::get<1>(data) : nullptr;
-    }
-
-    BranchData *GetBranchData() const {
-      return data.index() == 2 ? std::get<2>(data) : nullptr;
-    }
-  };
-
-  void ForEach(std::function<void(const NodeData &)> Func);
-};
-
-template <uint32 TreeDepth, typename LeafData, typename BranchData>
-inline Octree<TreeDepth, LeafData, BranchData>::Octree() {
-  static_assert(TreeDepth <= MAX_DEPTH, "Exceeds maximum depth");
-  // Levels[0].resize(1);
-}
-
-template <uint32 TreeDepth, typename LeafData, typename BranchData>
-inline typename Octree<TreeDepth, LeafData, BranchData>::Node &
-Octree<TreeDepth, LeafData, BranchData>::AtPositionLeaf(uvec3 Position) {
-  uvec3 NodePosition = uvec3(0);
-  MortonIndexType morton = Morton::Regular::MortonEncodeBounded<3>(
-      Position, uvec3(OctreeResolution()));
-  return AtMortonIndex(TreeDepth, morton);
-}
-
-template <uint32 TreeDepth, typename LeafData, typename BranchData>
-inline typename Octree<TreeDepth, LeafData, BranchData>::Node &
-Octree<TreeDepth, LeafData, BranchData>::AtMortonIndex(uint32 level,
-                                                       MortonIndexType index) {
-  return Levels.at(level).at(index);
-}
-
-template <uint32 TreeDepth, typename LeafData, typename BranchData>
-inline typename Octree<TreeDepth, LeafData, BranchData>::Node &
-Octree<TreeDepth, LeafData, BranchData>::InsertLeaf(uvec3 GlobalPosition) {
-  assert(glm::all(glm::greaterThanEqual(GlobalPosition, uvec3(0))) &&
-         glm::all(glm::lessThan(GlobalPosition, uvec3(OctreeResolution()))) &&
-         "Invalid Position");
-
-  Node *currentNode = &Levels[0][0];
-  uvec3 Position = {0, 0, 0};
-
-  for (int idepth = 0; idepth < TreeDepth; idepth++) {
-    const uint32 NodeSizeXYZ = SizeOfNodeAtDepth(idepth);
-    const AABB3i nodeAABB(Position, Position + uvec3(NodeSizeXYZ));
-    const ivec3 childSign = nodeAABB.SignFromCenter(GlobalPosition);
-    const uint32 ChildIndex = SignToChildIndex(childSign);
-    uvec3 PositionOfChild =
-        Position + uvec3(glm::min(childSign + ivec3(1), ivec3(1))) *
-                       uint32(NodeSizeXYZ / 2);
-    const MortonIndexType EncodedChildPosition =
-        IndexFromChildPos(PositionOfChild, idepth + 1);
-    auto &ChildBuffer = Levels[idepth + 1];
-
-    currentNode->ChildrenSet.set(ChildIndex);
-    if (ChildBuffer.find(EncodedChildPosition) == ChildBuffer.end()) {
-      ChildBuffer.insert(std::make_pair(EncodedChildPosition, Node()));
-    }
-
-    Node *Child = &ChildBuffer.at(EncodedChildPosition);
-    currentNode = Child;
-    Position +=
-        glm::min(childSign + ivec3(1), ivec3(1)) * int32(NodeSizeXYZ / 2);
-  }
-
-  return *currentNode;
-}
-
-template <uint32 TreeDepth, typename LeafData, typename BranchData>
-inline void Octree<TreeDepth, LeafData, BranchData>::InsertLeafs(
-    const std::vector<uvec3> &positions) {
-  static std::vector<std::pair<uvec3, MortonIndexType>> posMorton;
-  // std::pair<uvec3, uint32> posMorton[positions.size()];
-  posMorton.clear();
-  posMorton.reserve(positions.size());
-  int i = 0;
-  for (auto &pos : positions) {
-    MortonIndexType idx =
-        Morton::Regular::MortonEncode<3>(pos); // implement MortonEncode(x,y,z)
-    // posMorton[i] = {pos, idx};
-    posMorton.push_back({pos, idx});
-    i++;
-  }
-  std::sort(posMorton.begin(), posMorton.end(),
-            [](const auto &a, const auto &b) { return a.second < b.second; });
-
-  for (const auto &[pos, morton] : posMorton) {
-    InsertLeaf(pos);
-  }
-}
-
-template <uint32 TreeDepth, typename LeafData, typename BranchData>
-inline void Octree<TreeDepth, LeafData, BranchData>::ForEach(
-    std::function<void(const NodeData &)> func) {
-  struct NodeInfo {
-    uvec3 NodePos;
-    MortonIndexType MortonIndex;
-    uint32 Depth;
-    Node *node;
-    bool isLeaf = false;
-  };
-  std::stack<NodeInfo> stack;
-  uint64 NodesProcessed = 0;
-  stack.push(NodeInfo{.NodePos = {0, 0, 0},
-                      .MortonIndex = 0,
-                      .Depth = 0,
-                      .node = &Levels.at(0).at(0)});
-  while (!stack.empty()) {
-    NodeInfo Current = stack.top();
-    Node *node = Current.node;
-    stack.pop();
-    NodesProcessed++;
-    NodeData iterData;
-    iterData.Depth = Current.Depth;
-    iterData.NodeSizeXYZ = SizeOfNodeAtDepth(Current.Depth);
-    iterData.isLeaf = Current.isLeaf;
-    iterData.mortonCode = Current.MortonIndex;
-    iterData.NodePos = Current.NodePos;
-
-    if (Current.isLeaf) {
-      iterData.data.template emplace<1>(&node->data);
-    } else {
-      iterData.data.template emplace<0>();
-    }
-
-    func(iterData);
-    if (Current.isLeaf) {
-      continue;
-    }
-    for (uint8 i = 0; i < 8; i++) {
-      if (node->HasChildAtIndex(i)) {
-        NodeInfo ChildInfo;
-        ChildInfo.Depth = Current.Depth + 1;
-        vec<3, int8> ChildSignVector =
-            glm::max(ChildIndexToSign(i), vec<3, int8>(0));
-
-        ChildInfo.NodePos =
-            Current.NodePos +
-            (SizeOfNodeAtDepth(Current.Depth) / 2) * (uvec3)ChildSignVector;
-        ChildInfo.MortonIndex =
-            IndexFromChildPos(ChildInfo.NodePos, ChildInfo.Depth);
-        ChildInfo.node = &Levels.at(ChildInfo.Depth).at(ChildInfo.MortonIndex);
-        ChildInfo.isLeaf = ChildInfo.Depth == TreeDepth;
-        stack.push(ChildInfo);
+    void recycle(uint32_t index) noexcept {
+      if constexpr (!std::is_same_v<T, NoOctreePayload>) {
+        links[index] = free;
+        free = index;
       }
     }
+    T &at(uint32_t index) { return values.at(index); }
+    const T &at(uint32_t index) const { return values.at(index); }
+    std::span<const T> buffer() const noexcept {
+      if constexpr (std::is_same_v<T, NoOctreePayload>)
+        return {};
+      return values;
+    }
+  };
+  static_assert(!std::is_same_v<Cell, NoOctreePayload>,
+                "A terrain terminal needs a payload");
+  uint32_t depth_;
+  size_t terminalCount_ = 0;
+  uint64_t version_ = 0;
+  uint32_t freeBlock_ = null;
+  std::vector<GpuNode> topology_;
+  std::vector<Slot> slots_; // CPU-only edit metadata, never uploaded
+  PayloadPool<Cell> cells_;
+  PayloadPool<Summary> summaries_;
+
+  bool live(uint32_t index) const noexcept {
+    return topology_[index].tags & occupiedBit;
   }
-}
-} // namespace Lighthouse
+  bool terminal(uint32_t index) const noexcept {
+    return topology_[index].tags & terminalBit;
+  }
+  Handle handle(uint32_t index) const noexcept {
+    return {index, slots_[index].version};
+  }
+  uint32_t require(Handle h) const {
+    if (!contains(h))
+      throw std::invalid_argument("Expired terrain handle");
+    return h.index;
+  }
+  uint32_t octant_at(Point p, uint32_t level) const noexcept {
+    const auto shift = depth_ - level - 1;
+    return ((p[0] >> shift) & 1u) | (((p[1] >> shift) & 1u) << 1) |
+           (((p[2] >> shift) & 1u) << 2);
+  }
+  void validate(Region region) const {
+    if (region.depth > depth_)
+      throw std::out_of_range("Terrain region depth");
+    const auto size = uint32_t{1} << (depth_ - region.depth);
+    for (auto coordinate : region.origin)
+      if (coordinate >= extent() || coordinate % size)
+        throw std::out_of_range(
+            "Terrain region must be aligned and inside the tree");
+  }
+  uint64_t new_version() {
+    if (version_ == std::numeric_limits<uint64_t>::max())
+      throw std::length_error("Terrain handle version capacity");
+    return ++version_;
+  }
+  uint32_t block() {
+    if (freeBlock_ != null) {
+      const auto result = freeBlock_;
+      freeBlock_ = topology_[result].childBase;
+      for (uint32_t k = 0; k < 8; ++k)
+        topology_[result + k] = {};
+      return result;
+    }
+    const auto size = topology_.size();
+    if (size > static_cast<size_t>(null) - 8)
+      throw std::length_error("Terrain node capacity");
+    // Reserve both before changing sizes. No stored references survive this
+    // call.
+    if (topology_.capacity() < size + 8)
+      topology_.reserve((size + 8) * 2);
+    if (slots_.capacity() < size + 8)
+      slots_.reserve((size + 8) * 2);
+    topology_.resize(size + 8);
+    slots_.resize(size + 8);
+    return static_cast<uint32_t>(size);
+  }
+  void recycle_block(uint32_t first) noexcept {
+    topology_[first].childBase = freeBlock_;
+    freeBlock_ = first;
+  }
+  void activate(uint32_t index, uint32_t parent, uint32_t octant,
+                bool asTerminal, const Cell &value) {
+    const auto version = new_version();
+    if (asTerminal) {
+      const auto payload = cells_.acquire(value);
+      topology_[index] = {null, payload, 0, occupiedBit | terminalBit};
+      ++terminalCount_;
+    } else {
+      const auto first = block();
+      uint32_t payload = null;
+      try {
+        payload = summaries_.acquire(Summary{});
+      } catch (...) {
+        recycle_block(first);
+        throw;
+      }
+      topology_[index] = {first, payload, 0, occupiedBit};
+    }
+    slots_[index] = {version, parent,
+                     parent == null ? 0 : slots_[parent].depth + 1, octant};
+  }
+  void split(uint32_t index) {
+    if (slots_[index].depth == depth_)
+      throw std::out_of_range("Finest terrain cannot refine");
+    const Cell value = cells_.at(topology_[index].payload);
+    const auto first = block();
+    uint32_t summaryIndex = null;
+    uint32_t initialized = 0;
+    try {
+      summaryIndex = summaries_.acquire(Summary{});
+      for (; initialized < 8; ++initialized)
+        activate(first + initialized, index, initialized, true, value);
+    } catch (...) {
+      for (uint32_t k = 0; k < initialized; ++k)
+        release(first + k);
+      if (summaryIndex != null)
+        summaries_.recycle(summaryIndex);
+      recycle_block(first);
+      throw;
+    }
+    cells_.recycle(topology_[index].payload);
+    topology_[index] = {first, summaryIndex, 255, occupiedBit};
+    --terminalCount_;
+  }
+  void release_children(uint32_t index) noexcept {
+    const auto node = topology_[index];
+    for (uint32_t k = 0; k < 8; ++k)
+      if (node.childBits & (1u << k))
+        release(node.childBase + k);
+    recycle_block(node.childBase);
+    summaries_.recycle(node.payload);
+  }
+  void release(uint32_t index) noexcept {
+    if (terminal(index)) {
+      cells_.recycle(topology_[index].payload);
+      --terminalCount_;
+    } else
+      release_children(index);
+    topology_[index] = {};
+  }
+  void replace(uint32_t index, const Cell &value) {
+    if (terminal(index)) {
+      cells_.at(topology_[index].payload) = value;
+      return;
+    }
+    // Acquire before freeing the subtree for allocation-failure safety.
+    const auto payload = cells_.acquire(value);
+    release_children(index);
+    topology_[index] = {null, payload, 0, occupiedBit | terminalBit};
+    ++terminalCount_;
+  }
+  uint32_t descend(Region region, bool create) {
+    if (empty()) {
+      if (!create)
+        return null;
+      activate(0, null, 0, region.depth == 0, Cell{});
+    }
+    uint32_t index = 0;
+    for (uint32_t level = 0; level < region.depth; ++level) {
+      if (terminal(index))
+        split(index);
+      const auto octant = octant_at(region.origin, level);
+      const auto child = topology_[index].childBase + octant;
+      if (!(topology_[index].childBits & (1u << octant))) {
+        if (!create)
+          return null;
+        activate(child, index, octant, level + 1 == region.depth, Cell{});
+        topology_[index].childBits |= 1u << octant;
+      }
+      index = child;
+    }
+    return index;
+  }
+  void prune(uint32_t index) noexcept {
+    while (!topology_[index].childBits) {
+      const auto slot = slots_[index];
+      release(index);
+      if (slot.parent == null)
+        break;
+      index = slot.parent;
+      topology_[index].childBits &= ~(1u << slot.octant);
+    }
+  }
+  template <class Visitor>
+  void traverse(uint32_t index, Point origin, Visitor &visitor) const {
+    const auto level = slots_[index].depth;
+    const auto size = uint32_t{1} << (depth_ - level);
+    visitor(Entry{handle(index), {origin, level}, size, terminal(index)});
+    if (terminal(index))
+      return;
+    const auto node = topology_[index];
+    for (uint32_t k = 0; k < 8; ++k) {
+      if (!(node.childBits & (1u << k)))
+        continue;
+      auto childOrigin = origin;
+      for (uint32_t axis = 0; axis < 3; ++axis)
+        childOrigin[axis] += ((k >> axis) & 1u) * (size / 2);
+      traverse(node.childBase + k, childOrigin, visitor);
+    }
+  }
+};
+} // namespace EESG

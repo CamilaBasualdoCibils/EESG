@@ -6,6 +6,9 @@ namespace EESG {
 using Vec2 = Lighthouse::Vec2;
 using Vec3 = Lighthouse::Vec3;
 using Vec4 = Lighthouse::Vec4;
+using Dvec2 = Lighthouse::Dvec2;
+using Dvec3 = Lighthouse::Dvec3;
+using Dvec4 = Lighthouse::Dvec4;
 using IVec2 = glm::ivec2;
 using IVec3 = Lighthouse::IVec3;
 using IVec4 = Lighthouse::IVec4;
