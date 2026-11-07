@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
-
+#include <boost/describe.hpp>
 namespace EESG
 {
 struct alignas(16) MaterialFrameData
@@ -25,6 +25,7 @@ enum class SurfaceModel
   Unlit,
   Lit
 };
+BOOST_DESCRIBE_ENUM(EESG::SurfaceModel, Unlit, Lit)
 
 using MaterialValue =
     std::variant<float, int32_t, uint32_t, bool, Lighthouse::Vec2,
@@ -80,6 +81,7 @@ struct alignas(16) LightingFrameData
   Lighthouse::Vec4 cameraPosition{0.0f, 0.0f, 3.6f, 1.0f};
   Lighthouse::Vec4 ambientRadiance{0.03f, 0.03f, 0.03f, 0.0f};
   std::array<uint32_t, 4> lightCount{};
+  Lighthouse::Mat4 viewProjection{1.0f};
 };
 struct alignas(16) LightData
 {
@@ -88,7 +90,7 @@ struct alignas(16) LightData
   Lighthouse::Vec4 directionType{};
   Lighthouse::Vec4 spotCosines{};
 };
-static_assert(sizeof(LightingFrameData) == 48);
+static_assert(sizeof(LightingFrameData) == 112);
 static_assert(offsetof(LightingFrameData, lightCount) == 32);
 static_assert(sizeof(LightData) == 64);
 static_assert(offsetof(LightData, positionRange) == 16);

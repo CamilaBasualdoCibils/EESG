@@ -98,6 +98,10 @@ public:
     overhead.Add<Transform>().SetRot(glm::quatLookAtRH(
         -glm::normalize(Vec3(-0.25f, 1.0f, 0.45f)), Vec3(0, 0, 1)));
     overhead.Add<Light>(Light{.type = LightType::Directional, .intensity = 3.0f});
+
+    auto leftPointLight = m_world.CreateEntity("Left point light");
+    leftPointLight.Add<Transform>().SetPos({-2.0f, 0, 0.0f});
+    leftPointLight.Add<Light>(Light{.type = LightType::Point, .intensity = 2.0f, .range = 5.0f});
     // Three blocky spheres in view of the temporary camera, spanning chunk
     // boundaries so the demo also exercises pooled chunk draws.
     for (const auto center : {Vec3(-1.05f, -0.65f, 0.3f),
@@ -181,7 +185,7 @@ public:
         });
 #ifdef LIGHTHOUSE_IMGUI
     renderer.CreateView<Lighthouse::ImGuiView>(
-        [this, dragon = dragon]() mutable
+        [this, dragon = dragon, leftPointLight = leftPointLight,dirLight = overhead]() mutable
         {
           ImGui::ShowDemoWindow();
           ImPlot::ShowDemoWindow();
@@ -210,6 +214,17 @@ public:
             dragon.Get<Transform>().SetRot(glm::quat(glm::radians(rotation)));
           if (ImGui::DragFloat3("Scale", &scale.x, 0.1f))
             dragon.Get<Transform>().SetScale(scale);
+ImGui::Separator();
+          Vec3 leftLightPos = leftPointLight.Get<Transform>().GetPos();
+          if (ImGui::DragFloat3("Left light position", &leftLightPos.x, 0.1f))
+            leftPointLight.Get<Transform>().SetPos(leftLightPos);
+          ImGui::DragFloat("Left light intensity", &leftPointLight.Get<Light>().intensity, 0.1f);
+          ImGui::DragFloat("Left light range", &leftPointLight.Get<Light>().range, 0.1f,0.0f);
+          Vec3 dirLightPos = dirLight.Get<Transform>().GetPos();
+          if (ImGui::DragFloat3("Directional light position", &dirLightPos.x, 0.1f))
+            dirLight.Get<Transform>().SetPos(dirLightPos);
+          ImGui::DragFloat("Directional light intensity", &dirLight.Get<Light>().intensity, 0.1f);
+
 
           ImGui::End();
         });

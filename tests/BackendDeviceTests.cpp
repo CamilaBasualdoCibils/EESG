@@ -67,6 +67,251 @@ void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));gl_Position=vec
         {.image = image, .format = ImageFormat::RGBA8});
   }
 };
+TEST_P(HeadlessDeviceTests, InstancedIndirectAdditiveLighting)
+{
+  const auto vertex = Shader(R"(#version 450
+layout(location=0) in vec3 position;
+void main(){gl_Position=vec4(position,1);}
+)",
+                             ShaderStage::Vertex);
+  const auto fragment = Shader(R"(#version 450
+layout(location=0) out vec4 color;
+void main(){color=vec4(0.125,0.25,0.375,0);}
+)",
+                               ShaderStage::Fragment);
+  const auto layout = device->CreatePipelineLayout({});
+  GraphicsPipelineDesc desc{
+      .vertexShader = vertex,
+      .fragmentShader = fragment,
+      .vertexLayout = {.bindings = {{.binding = 0, .stride = 12}},
+                       .attributes = {{.location = 0,
+                                       .binding = 0,
+                                       .format = VertexFormat::Float3}}},
+      .colorFormats = {ImageFormat::RGBA8},
+      .layout = layout,
+      .blend = {.enabled = true,
+                .destinationColorFactor = BlendFactor::One,
+                .destinationAlphaFactor = BlendFactor::One}};
+  const auto additive = device->CreatePipeline(desc);
+  desc.blend.enabled = false;
+  const auto replace = device->CreatePipeline(desc);
+  const std::array positions{-1.f, -1.f, 0.f, 3.f, -1.f, 0.f, -1.f, 3.f, 0.f};
+  const std::array<uint32_t, 3> indices{0, 1, 2};
+  const std::array draws{DrawIndexedIndirectCommand{3, 2, 0, 0, 0},
+                         DrawIndexedIndirectCommand{3, 3, 0, 0, 0}};
+  const auto vertices = device->CreateBuffer(
+      {.size = sizeof(positions),
+       .usage = BufferUsage::Vertex,
+       .initialData = std::as_bytes(std::span(positions))});
+  const auto indexBuffer =
+      device->CreateBuffer({.size = sizeof(indices),
+                            .usage = BufferUsage::Index,
+                            .initialData = std::as_bytes(std::span(indices))});
+  const auto indirect =
+      device->CreateBuffer({.size = sizeof(draws),
+                            .usage = BufferUsage::Indirect,
+                            .initialData = std::as_bytes(std::span(draws))});
+  const auto target = device->CreateImage(
+      {.width = 16,
+       .height = 16,
+       .format = ImageFormat::RGBA8,
+       .usage = {ImageUsage::ColorAttachment, ImageUsage::TransferSource}});
+  const auto view =
+      device->CreateImageView({.image = target, .format = ImageFormat::RGBA8});
+  const auto commands = device->CreateCommandList(QueueType::Graphics);
+  for (bool overwrite : {false, true})
+  {
+    commands->Begin();
+    commands->BeginRendering({.colorAttachment = view,
+                              .clearColor = true,
+                              .width = 16,
+                              .height = 16});
+    commands->BindPipeline(additive);
+    commands->BindVertexBuffer(vertices, 12);
+    commands->BindIndexBuffer(indexBuffer);
+    commands->MultiDrawIndexedIndirect(indirect, 2);
+    if (overwrite)
+    {
+      commands->BindPipeline(replace);
+      commands->BindVertexBuffer(vertices, 12);
+      commands->BindIndexBuffer(indexBuffer);
+      commands->DrawIndexed(3);
+    }
+    commands->EndRendering();
+    commands->End();
+    device->Submit(*commands);
+    const auto pixels = device->ReadImage(target);
+    const auto offset = (8 * 16 + 8) * 4;
+    EXPECT_NEAR(std::to_integer<unsigned>(pixels[offset]),
+                (overwrite ? 0.125f : 0.625f) * 255.f, 2.f);
+    commands->Clear();
+  }
+  device->WaitIdle();
+  device->DestroyImageView(view);
+  device->DestroyImage(target);
+  device->DestroyBuffer(indirect);
+  device->DestroyBuffer(indexBuffer);
+  device->DestroyBuffer(vertices);
+  device->DestroyPipeline(replace);
+  device->DestroyPipeline(additive);
+  device->DestroyPipelineLayout(layout);
+  device->DestroyModule(fragment);
+  device->DestroyModule(vertex);
+}
+TEST_P(HeadlessDeviceTests, ConfigurableBlendFactorsAndOperations)
+{
+  const auto vertex = Shader(Fullscreen, ShaderStage::Vertex);
+  const auto fragment = Shader(R"(#version 450
+layout(location=0) out vec4 first;
+layout(location=1) out vec4 second;
+void main(){first=vec4(0.2,0.4,0.6,0.25);second=first;}
+)",
+                               ShaderStage::Fragment);
+  const auto layout = device->CreatePipelineLayout({});
+  const auto a = Target(16), b = Target(16);
+  const auto av = View(a), bv = View(b);
+  struct Case
+  {
+    const char* name;
+    BlendState state;
+    Vec4 expected;
+  };
+  const std::array cases{
+      Case{"disabled ignores factors",
+           {.enabled = false,
+            .sourceColorFactor = BlendFactor::Zero,
+            .destinationColorFactor = BlendFactor::One},
+           {0.2, 0.4, 0.6, 0.25}},
+      Case{"alpha over",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::SourceAlpha,
+            .destinationColorFactor = BlendFactor::OneMinusSourceAlpha,
+            .destinationAlphaFactor = BlendFactor::OneMinusSourceAlpha},
+           {0.575, 0.325, 0.225, 0.8125}},
+      Case{"source and destination color",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::DestinationColor,
+            .destinationColorFactor = BlendFactor::SourceColor,
+            .sourceAlphaFactor = BlendFactor::DestinationColor,
+            .destinationAlphaFactor = BlendFactor::SourceColor},
+           {0.28, 0.24, 0.12, 0.375}},
+      Case{"inverse colors",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::OneMinusSourceColor,
+            .destinationColorFactor = BlendFactor::OneMinusDestinationColor,
+            .sourceAlphaFactor = BlendFactor::OneMinusSourceAlpha,
+            .destinationAlphaFactor = BlendFactor::OneMinusDestinationAlpha},
+           {0.37, 0.45, 0.33, 0.375}},
+      Case{"destination alpha",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::DestinationAlpha,
+            .destinationColorFactor = BlendFactor::OneMinusDestinationAlpha,
+            .sourceAlphaFactor = BlendFactor::DestinationAlpha,
+            .destinationAlphaFactor = BlendFactor::SourceAlpha},
+           {0.325, 0.375, 0.475, 0.375}},
+      Case{"constant color",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::ConstantColor,
+            .destinationColorFactor = BlendFactor::OneMinusConstantColor,
+            .sourceAlphaFactor = BlendFactor::ConstantAlpha,
+            .destinationAlphaFactor = BlendFactor::OneMinusConstantAlpha,
+            .constants = {0.1, 0.2, 0.3, 0.4}},
+           {0.65, 0.32, 0.25, 0.55}},
+      Case{"constant alpha",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::ConstantAlpha,
+            .destinationColorFactor = BlendFactor::OneMinusConstantAlpha,
+            .sourceAlphaFactor = BlendFactor::ConstantColor,
+            .destinationAlphaFactor = BlendFactor::OneMinusConstantColor,
+            .constants = {0.1, 0.2, 0.3, 0.4}},
+           {0.5, 0.34, 0.3, 0.55}},
+      Case{"constant clamping",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::ConstantColor,
+            .destinationColorFactor = BlendFactor::OneMinusConstantColor,
+            .sourceAlphaFactor = BlendFactor::ConstantAlpha,
+            .destinationAlphaFactor = BlendFactor::OneMinusConstantAlpha,
+            .constants = {-1, 2, 0.5, 2}},
+           {0.7, 0.4, 0.35, 0.25}},
+      Case{"saturated source alpha",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::SourceAlphaSaturate},
+           {0.05, 0.1, 0.15, 0.25}},
+      Case{"subtract color, reverse subtract alpha",
+           {.enabled = true,
+            .destinationColorFactor = BlendFactor::One,
+            .colorOperation = BlendOperation::Subtract,
+            .destinationAlphaFactor = BlendFactor::One,
+            .alphaOperation = BlendOperation::ReverseSubtract},
+           {0, 0.1, 0.5, 0.5}},
+      Case{"reverse subtract color, subtract alpha",
+           {.enabled = true,
+            .destinationColorFactor = BlendFactor::One,
+            .colorOperation = BlendOperation::ReverseSubtract,
+            .destinationAlphaFactor = BlendFactor::One,
+            .alphaOperation = BlendOperation::Subtract},
+           {0.5, 0, 0, 0}},
+      Case{"min color, max alpha ignore factors",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::Zero,
+            .colorOperation = BlendOperation::Min,
+            .sourceAlphaFactor = BlendFactor::Zero,
+            .alphaOperation = BlendOperation::Max},
+           {0.2, 0.3, 0.1, 0.75}},
+      Case{"max color, min alpha ignore factors",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::Zero,
+            .colorOperation = BlendOperation::Max,
+            .sourceAlphaFactor = BlendFactor::Zero,
+            .alphaOperation = BlendOperation::Min},
+           {0.7, 0.4, 0.6, 0.25}},
+      Case{"replacement factors",
+           {.enabled = true,
+            .sourceColorFactor = BlendFactor::Zero,
+            .destinationColorFactor = BlendFactor::One},
+           {0.7, 0.3, 0.1, 0.25}}};
+  const auto commands = device->CreateCommandList(QueueType::Graphics);
+  for (const auto& test : cases)
+  {
+    SCOPED_TRACE(test.name);
+    const auto pipeline = device->CreatePipeline(
+        {.vertexShader = vertex,
+         .fragmentShader = fragment,
+         .colorFormats = {ImageFormat::RGBA8, ImageFormat::RGBA8},
+         .layout = layout,
+         .blend = test.state});
+    commands->Begin();
+    commands->BeginRendering({.clearColor = true,
+                              .clearColorValue = {0.7, 0.3, 0.1},
+                              .width = 16,
+                              .height = 16,
+                              .colorAttachments = {av, bv},
+                              .clearColorAlpha = 0.75f});
+    commands->BindPipeline(pipeline);
+    commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
+    commands->EndRendering();
+    commands->End();
+    device->Submit(*commands);
+    for (auto target : {a, b})
+    {
+      const auto pixels = device->ReadImage(target);
+      for (int channel = 0; channel < 4; ++channel)
+        EXPECT_NEAR(
+            std::to_integer<unsigned>(pixels[(8 * 16 + 8) * 4 + channel]),
+            test.expected[channel] * 255.f, 2.f);
+    }
+    commands->Clear();
+    device->DestroyPipeline(pipeline);
+  }
+  device->WaitIdle();
+  device->DestroyImageView(bv);
+  device->DestroyImageView(av);
+  device->DestroyImage(b);
+  device->DestroyImage(a);
+  device->DestroyPipelineLayout(layout);
+  device->DestroyModule(fragment);
+  device->DestroyModule(vertex);
+}
 TEST_P(HeadlessDeviceTests, MultipleColorAttachmentsClearAndDraw)
 {
   const auto a = Target(), b = Target();

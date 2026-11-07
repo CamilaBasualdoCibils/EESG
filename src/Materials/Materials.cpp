@@ -138,15 +138,24 @@ Materials::LoadShadingModel(SurfaceModel model)
         {.bindings = {{.binding = 0,
                        .type = DescriptorType::StorageBuffer,
                        .count = 1,
-                       .stages = ShaderStageFlags::Fragment}}});
+                       .stages = ShaderStageFlags::Vertex |
+                                 ShaderStageFlags::Fragment}}});
     pipelineLayout.sets.push_back(pipeline.lightingLayout);
   }
   pipeline.layout = m_device.CreatePipelineLayout(pipelineLayout);
   const std::string base = model == SurfaceModel::Lit ? "Lit" : "Unlit";
-  shading->m_vertex = m_device.CreateShaderModule(ShaderCompiler::Compile(
-      ReadSource(m_resourceRoot /
-                 "materials/passes/DeferredLighting.vert.glsl"),
-      {.stage = ShaderStage::Vertex}));
+  std::string vertexSource =
+      model == SurfaceModel::Lit
+          ? "#version 450\n" +
+                ReadSource(m_resourceRoot /
+                           "materials/passes/EvaluateLight.glsl") +
+                "\n" +
+                ReadSource(m_resourceRoot /
+                           "materials/passes/LightVolume.vert.glsl")
+          : ReadSource(m_resourceRoot /
+                       "materials/passes/DeferredLighting.vert.glsl");
+  shading->m_vertex = m_device.CreateShaderModule(
+      ShaderCompiler::Compile(vertexSource, {.stage = ShaderStage::Vertex}));
   std::string lightingSource;
   if (model == SurfaceModel::Lit)
     lightingSource =
@@ -158,12 +167,32 @@ Materials::LoadShadingModel(SurfaceModel model)
       m_resourceRoot / ("materials/passes/" + base + ".deferred.frag.glsl"));
   shading->m_fragment = m_device.CreateShaderModule(ShaderCompiler::Compile(
       lightingSource, {.stage = ShaderStage::Fragment}));
-  pipeline.pipeline =
-      m_device.CreatePipeline({.vertexShader = shading->m_vertex,
-                               .fragmentShader = shading->m_fragment,
-                               .colorFormats = {ImageFormat::RGBA8},
-                               .depthFormat = ImageFormat::Depth24Stencil8,
-                               .layout = pipeline.layout});
+  VertexLayout volumeLayout;
+  if (model == SurfaceModel::Lit)
+    volumeLayout = {
+        .bindings = {{.binding = 0, .stride = sizeof(Mesh3DVertex)}},
+        .attributes = {{.location = 0,
+                        .binding = 0,
+                        .format = VertexFormat::Float3,
+                        .offset = offsetof(Mesh3DVertex, position)},
+                       {.location = 1,
+                        .binding = 0,
+                        .format = VertexFormat::Float3,
+                        .offset = offsetof(Mesh3DVertex, normal)}}};
+  pipeline.pipeline = m_device.CreatePipeline(
+      {.vertexShader = shading->m_vertex,
+       .fragmentShader = shading->m_fragment,
+       .vertexLayout = volumeLayout,
+       .colorFormats = {ImageFormat::RGBA16f},
+       .depthFormat = ImageFormat::Depth24Stencil8,
+       .layout = pipeline.layout,
+       .blend = {.enabled = model == SurfaceModel::Lit,
+                 .sourceColorFactor = BlendFactor::One,
+                 .destinationColorFactor = BlendFactor::One,
+                 .colorOperation = BlendOperation::Add,
+                 .sourceAlphaFactor = BlendFactor::One,
+                 .destinationAlphaFactor = BlendFactor::One,
+                 .alphaOperation = BlendOperation::Add}});
   if (!pipeline.pipeline)
     throw std::runtime_error(
         "Device returned an invalid deferred lighting pipeline");

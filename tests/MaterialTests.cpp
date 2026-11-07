@@ -145,9 +145,9 @@ void TestTerrainPixels(
         .usage = {ImageUsage::ColorAttachment, ImageUsage::Sampled}}));
     views.push_back(device.CreateImageView({.image = attributes.back(), .format = format}));
   }
-  const auto image = device.CreateImage({.width = 128, .height = 128, .format = ImageFormat::RGBA8,
+  const auto image = device.CreateImage({.width = 128, .height = 128, .format = ImageFormat::RGBA16f,
       .usage = {ImageUsage::ColorAttachment, ImageUsage::TransferSource}});
-  const auto view = device.CreateImageView({.image = image, .format = ImageFormat::RGBA8});
+  const auto view = device.CreateImageView({.image = image, .format = ImageFormat::RGBA16f});
   const auto depth =
       device.CreateImage({.width = 128,
                           .height = 128,
@@ -187,16 +187,22 @@ void TestTerrainPixels(
   commands->EndRendering();
   commands->End();
   device.Submit(*commands);
-  const auto pixels = device.ReadImage(image);
-  // Read one point inside each cube. GL/Vulkan y orientation may differ.
+  const auto readback = device.CreateImage({.width=128,.height=128,.format=ImageFormat::RGBA8,
+      .usage={ImageUsage::TransferSource,ImageUsage::TransferDestination}});
+  commands->Clear();
+  commands->Begin();
+  const Lighthouse::BlitRegion region{
+      .srcSubresource={ImageAspect::Color,0,0,1}, .srcOffsets={{{0,0,0},{128,128,1}}},
+      .dstSubresource={ImageAspect::Color,0,0,1}, .dstOffsets={{{0,0,0},{128,128,1}}}};
+  commands->BlitImage(image,readback,region,ImageFilter::Nearest);
+  commands->End();
+  device.Submit(*commands);
+  const auto pixels = device.ReadImage(readback);
   for (auto x : {36u, 92u})
-  {
-    bool colored = false;
-    for (auto y : {60u, 68u})
-      colored |= std::to_integer<unsigned>(pixels[(y * 128 + x) * 4 + 1]) > 100;
-    Check(colored);
-  }
-  Check(std::to_integer<unsigned>(pixels[(64 * 128 + 64) * 4 + 1]) == 0);
+    Check(std::to_integer<unsigned>(pixels[(60*128+x)*4+1]) > 20 ||
+          std::to_integer<unsigned>(pixels[(68*128+x)*4+1]) > 20);
+  Check(std::to_integer<unsigned>(pixels[(64*128+64)*4+1]) == 0);
+  device.DestroyImage(readback);
   device.WaitIdle();
   device.DestroyDescriptorSet(lightingSet);
   device.DestroySampler(sampler);

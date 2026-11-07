@@ -212,6 +212,10 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
     point.Add<EESG::Transform>().SetPos({0, 0, 1});
     point.Add<EESG::Light>(EESG::Light{
         .type = EESG::LightType::Point, .intensity = 0, .range = 2});
+    auto secondPoint = world.CreateEntity("Second point instance");
+    secondPoint.Add<EESG::Transform>().SetPos({0,0,1});
+    secondPoint.Add<EESG::Light>(EESG::Light{.type=EESG::LightType::Point,
+        .color={0,1,0}, .intensity=0, .range=2});
     auto spot = world.CreateEntity("Spot light");
     spot.Add<EESG::Transform>().SetPos({0, 0, 1});
     spot.Add<EESG::Light>(
@@ -372,6 +376,23 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
     render();
     const int pointRed = component(74, 0);
     Check(pointRed > 10);
+    const auto pointGreen = component(74,1);
+    secondPoint.Get<EESG::Light>().intensity = 0.3f;
+    render();
+    Check(std::abs(component(74,0)-pointRed) <= 1);
+    Check(component(74,1) > pointGreen);
+    secondPoint.Get<EESG::Light>().enabled = false;
+    point.Get<EESG::Light>().type = EESG::LightType::Spot;
+    render();
+    Check(component(74,0) > 10); // Live shape changes update the indirect batches.
+    point.Get<EESG::Light>().type = EESG::LightType::Point;
+    point.Get<EESG::Light>().range = 4; // Camera is inside the sphere.
+    render();
+    Check(component(74, 0) > pointRed);
+    point.Get<EESG::Light>().range =
+        200; // Exit faces extend past the camera far plane.
+    render();
+    Check(component(74, 0) > pointRed);
     point.Get<EESG::Light>().range = 0.1f;
     render();
     Check(component(74, 0) == 0);
@@ -463,6 +484,31 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
 int main()
 {
   Fixtures fixtures;
+  const auto volumes = EESG::Detail::MakeLightVolumes();
+  Check(volumes[0].indices.size() == 3);
+  for (size_t shape : {size_t{1}, size_t{2}})
+  {
+    const auto& mesh = volumes[shape];
+    Check(mesh.indices.size() > 30);
+    for (size_t i=0; i<mesh.indices.size(); i+=3)
+    {
+      const auto a = mesh.vertices.at(mesh.indices[i]).position;
+      const auto b = mesh.vertices.at(mesh.indices[i + 1]).position;
+      const auto c = mesh.vertices.at(mesh.indices[i + 2]).position;
+      const auto n = glm::normalize(glm::cross(b - a, c - a));
+      if (shape == 1)
+        Check(glm::dot(n, a) >= 1.0f - 1e-5f);
+      else
+        for (int angle = 0; angle < 64; ++angle)
+        {
+          const float phi = angle * 6.2831853f / 64;
+          for (float depth : {0.0f, 0.5f, 1.0f})
+            Check(glm::dot(n, Vec3(std::cos(phi) * depth, std::sin(phi) * depth,
+                                   -depth) -
+                                  a) <= 1e-5f);
+        }
+    }
+  }
   for (bool vulkan : {false, true})
   {
     std::unique_ptr<IGraphicsBackend> backend;

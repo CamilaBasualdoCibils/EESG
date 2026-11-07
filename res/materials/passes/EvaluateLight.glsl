@@ -12,7 +12,8 @@ struct LightSample { vec3 direction; vec3 radiance; };
 layout(set=1, binding=0, std430) readonly buffer SceneLighting {
     vec4 cameraPosition;
     vec4 ambientRadiance;
-    uvec4 lightCount;
+    uvec4 lightCount; // total count; fullscreen, point, spot range starts.
+    mat4 viewProjection;
     LightData lights[];
 } sceneLighting;
 
