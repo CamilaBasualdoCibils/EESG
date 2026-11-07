@@ -1,7 +1,7 @@
 #pragma once
 
 #include "World/Entity/Entity.hpp"
-#include "World/WorldTerrain.hpp"
+#include "World/Terrain/WorldTerrain.hpp"
 #include <string>
 #include <memory>
 

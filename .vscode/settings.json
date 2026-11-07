@@ -1,4 +1,4 @@
 {
   "cmake.useCMakePresets": "always",
-  "cmake.configureArgs": ["-DLIGHTHOUSE_LIGHTHOUSE_ENABLE_TRACY=ON"]
+  "cmake.configureArgs": []
 }

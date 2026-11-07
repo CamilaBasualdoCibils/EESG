@@ -3,6 +3,7 @@
 #include "World/Entity/MeshRender.hpp"
 #include "World/Entity/Transform.hpp"
 #include "World/World.hpp"
+#include "World/Terrain/TerrainMeshPool.hpp"
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
@@ -17,7 +18,8 @@ class WorldRenderer final : public Lighthouse::IRenderTechnique
 public:
   WorldRenderer(Lighthouse::Renderer* renderer, World* world,
                 UVec2 resolution = {1280, 720})
-      : m_renderer(renderer), m_world(world), m_resolution(resolution)
+      : m_renderer(renderer), m_world(world), m_resolution(resolution),
+        m_terrainPool(*renderer->GetRenderDevice())
   {
     SetRenderResolution(resolution);
   }
@@ -110,14 +112,41 @@ public:
                ImportedRenderGraphBuffer{draw.uniform}),
            meshHandle, entity, draw.set});
     }
+    m_terrainPool.Rebuild(m_world->GetTerrain());
+    std::vector<RenderGraphResource> terrainBuffers;
+    DescriptorSetHandle terrainSet{};
+    if (m_terrainPool.Vertices())
+    {
+      m_draws.emplace_back();
+      auto& draw = m_draws.back();
+      const Mat4 identity(1.0f);
+      const auto bytes = std::as_bytes(std::span(&identity, 1));
+      draw.uniform = device.CreateBuffer({.size = bytes.size(),
+          .usage = BufferUsage::Uniform, .initialData = bytes});
+      draw.set = device.CreateDescriptorSet({.layout = m_setLayout});
+      const std::array writes{DescriptorWrite{.binding = 0,
+          .resource = DescriptorBufferInfo{.buffer = draw.uniform, .range = bytes.size()}}};
+      device.UpdateDescriptorSet(draw.set, writes);
+      terrainSet = draw.set;
+      for (auto buffer : {m_terrainPool.Vertices(), m_terrainPool.Indices(),
+                          m_terrainPool.Indirect(), draw.uniform})
+      {
+        const auto desc = device.GetBufferDesc(buffer);
+        terrainBuffers.push_back(context.graph.Import("Terrain buffer",
+            ImportedRenderGraphBuffer::Desc{.size = desc->size, .usage = desc->usage},
+            ImportedRenderGraphBuffer{buffer}));
+      }
+    }
     struct PassData
     {
       RenderGraphResource color, depth;
       std::vector<Geometry> geometry;
+      std::vector<RenderGraphResource> terrain;
+      DescriptorSetHandle terrainSet{};
     };
     const auto& output = context.graph.AddPass<PassData>(
         "World Phong",
-        [size, geometry](RenderGraph::Builder& builder, PassData& data)
+        [size, geometry, terrainBuffers, terrainSet](RenderGraph::Builder& builder, PassData& data)
         {
           data.color = builder.Create<RenderGraphImage>(
               "World color",
@@ -133,6 +162,8 @@ public:
                               .format = ImageFormat::Depth32,
                               .usage = {ImageUsage::DepthAttachment}});
           data.depth = builder.Write(data.depth);
+          data.terrainSet = terrainSet;
+          for (auto buffer : terrainBuffers) data.terrain.push_back(builder.Read(buffer));
           data.geometry = geometry;
           for (auto& draw : data.geometry)
           {
@@ -190,6 +221,11 @@ public:
                 static_cast<std::int32_t>(
                     mesh->vertexBuffers.front().offset /
                     mesh->layout.bindings.front().stride));
+          }
+          if (data.terrainSet)
+          {
+            commands.BindDescriptorSet(0, data.terrainSet);
+            m_terrainPool.Draw(commands);
           }
           commands.EndRendering();
           commands.End();
@@ -313,5 +349,6 @@ void main()
   Lighthouse::ShaderModuleHandle m_vertexShader{}, m_fragmentShader{};
   Lighthouse::GraphicsPipelineHandle m_pipeline{};
   std::vector<DrawResources> m_draws;
+  TerrainMeshPool m_terrainPool;
 };
 } // namespace EESG

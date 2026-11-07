@@ -22,9 +22,17 @@ file(GLOB_RECURSE _EESG_sources CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 
+add_library(EESGMaterials src/Materials/Materials.cpp)
+target_include_directories(EESGMaterials PUBLIC src)
+target_compile_definitions(EESGMaterials PRIVATE
+    EESG_RESOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/res")
+target_link_libraries(EESGMaterials PRIVATE Lighthouse::Engine)
+# Material sources are compiled by EESGMaterials, not twice into the executable.
+list(REMOVE_ITEM _EESG_sources "${CMAKE_CURRENT_SOURCE_DIR}/src/Materials/Materials.cpp")
 add_executable(EESG ${_EESG_sources})
 target_include_directories(EESG PRIVATE src)
 target_link_libraries(EESG PRIVATE
+    EESGMaterials
     Lighthouse::Engine
     Lighthouse::OpenGLBackend
     Lighthouse::VulkanBackend
@@ -32,12 +40,20 @@ target_link_libraries(EESG PRIVATE
 
 if(EESG_BUILD_TESTING)
     enable_testing()
+    add_executable(EESGMaterialTests tests/MaterialTests.cpp)
+    target_link_libraries(EESGMaterialTests PRIVATE EESGMaterials)
+    add_test(NAME EESGMaterialTests COMMAND EESGMaterialTests)
+    add_executable(EESGTerrainMesherTests tests/TerrainMesherTests.cpp)
+    target_include_directories(EESGTerrainMesherTests PRIVATE src)
+    target_link_libraries(EESGTerrainMesherTests PRIVATE Lighthouse::Engine)
+    add_test(NAME EESGTerrainMesherTests COMMAND EESGTerrainMesherTests)
     add_executable(EESGOctreeTests tests/AdaptiveOctreeTests.cpp)
     target_include_directories(EESGOctreeTests PRIVATE src/Types)
     add_test(NAME EESGOctreeTests COMMAND EESGOctreeTests)
 
     add_executable(EESGWorldTerrainTests tests/WorldTerrainTests.cpp)
     target_include_directories(EESGWorldTerrainTests PRIVATE src)
+    target_link_libraries(EESGWorldTerrainTests PRIVATE Lighthouse::Engine)
     add_test(NAME EESGWorldTerrainTests COMMAND EESGWorldTerrainTests)
 
     find_package(GTest CONFIG REQUIRED)

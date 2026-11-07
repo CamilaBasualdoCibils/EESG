@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace EESG
 {
@@ -242,6 +243,7 @@ public:
       if (it->second->empty())
         chunks_.erase(it);
     }
+    ++revision_;
     // Every loaded ancestor is a derived representation of the edited chunk.
     // Invalidating removes it immediately; there are no stale sample results.
     for (auto cache = loaded_.begin(); cache != loaded_.end();)
@@ -304,6 +306,19 @@ public:
     }
     return *find(key);
   }
+  std::vector<RegionKey> source_keys() const
+  {
+    std::vector<RegionKey> keys;
+    for (const auto& [key, data] : chunks_) keys.push_back(key);
+    return keys;
+  }
+  uint64_t revision() const noexcept { return revision_; }
+  const TerrainRegion::Tree* source(RegionKey key) const
+  {
+    validate(key);
+    const auto it = chunks_.find(key);
+    return it == chunks_.end() ? nullptr : it->second.get();
+  }
   size_t source_chunk_count() const noexcept
   {
     return chunks_.size();
@@ -314,11 +329,13 @@ public:
   }
   void clear() noexcept
   {
+    ++revision_;
     loaded_.clear();
     chunks_.clear();
   }
 
 private:
+  uint64_t revision_ = 0;
   using SourceMap =
       std::unordered_map<RegionKey, std::unique_ptr<TerrainRegion::Tree>,
                          RegionKeyHash>;

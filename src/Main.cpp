@@ -16,6 +16,7 @@
 #include <imgui.h>
 #include <implot.h>
 #endif
+#include <boost/program_options.hpp>
 
 namespace EESG
 {
@@ -32,10 +33,10 @@ public:
     auto& renderer = GetRenderer();
     m_windowView = renderer.CreateWindowView(
         {.title = "EESG", .width = 1280, .height = 720, .decorated = true});
-    const auto asset = Lighthouse::Assets::LoadGLTF("../DamagedHelmet.gltf");
+    const auto asset = Lighthouse::Assets::LoadGLTF("../DragonAttenuation.gltf");
     if (asset.meshes.empty() || asset.meshes[0].vertices.empty())
       throw std::runtime_error("DamagedHelmet.gltf has no mesh");
-    const Lighthouse::Mesh3D& mesh3D = asset.meshes[0];
+    const Lighthouse::Mesh3D& mesh3D = asset.meshes[1];
     const auto meshHandle = renderer.UploadMesh(mesh3D);
     auto dragon = m_world.CreateEntity("dragon");
     auto& transform = dragon.Add<Transform>();
@@ -55,6 +56,23 @@ public:
     transform.SetScale(Vec3(scale));
     transform.SetPos(-(rotation * ((minimum + maximum) * (0.5f * scale))));
     dragon.Add<MeshRender>(meshHandle);
+    // Three blocky spheres in view of the temporary camera, spanning chunk
+    // boundaries so the demo also exercises pooled chunk draws.
+    for (const auto center : {Vec3(-1.05f, -0.65f, 0.3f),
+                              Vec3(0.95f, -0.6f, 0.1f), Vec3(0.0f, 0.9f, -0.5f)})
+    {
+      constexpr float radius = 0.45f;
+      const auto low = WorldTerrain::voxel_position(Dvec3(center - Vec3(radius)));
+      const auto high = WorldTerrain::voxel_position(Dvec3(center + Vec3(radius)));
+      for (auto z = low[2]; z <= high[2]; ++z)
+        for (auto y = low[1]; y <= high[1]; ++y)
+          for (auto x = low[0]; x <= high[0]; ++x)
+          {
+            const Vec3 point = (Vec3(x, y, z) + Vec3(0.5f)) * float(WorldTerrain::voxel_width);
+            if (glm::dot(point - center, point - center) <= radius * radius)
+              m_world.GetTerrain().set_voxel({x, y, z}, {1, 1});
+          }
+    }
     m_worldRenderer =
         renderer
             .AddTechnique<WorldRenderer>(&renderer, &m_world, UVec2{1280, 720})
@@ -160,6 +178,8 @@ public:
     m_width = size.width;
     m_height = size.height;
     renderer.Compile();
+    m_terrainRevision = m_world.GetTerrain().revision();
+    std::cout << renderer.GetRenderGraph().Dot() << '\n';
   }
   void OnUpdate(float) override
   {
@@ -169,9 +189,10 @@ public:
                           ->GetFramebufferSize();
     if (!size.width || !size.height)
       return;
-    if (m_recompile || size.width != m_width || size.height != m_height)
+    if (m_world.GetTerrain().revision() != m_terrainRevision || m_recompile || size.width != m_width || size.height != m_height)
     {
       renderer.Compile();
+      m_terrainRevision = m_world.GetTerrain().revision();
       m_recompile = false;
       m_width = size.width;
       m_height = size.height;
@@ -184,16 +205,29 @@ private:
   Lighthouse::RenderViewHandle m_windowView{};
   Lighthouse::RenderTechniqueHandle m_worldRenderer{};
   std::uint32_t m_width{}, m_height{};
+  uint64_t m_terrainRevision{};
   bool m_recompile{};
 };
 } // namespace EESG
 
-int main()
+int main(int argc, char** argv)
 {
+  boost::program_options::options_description desc{"Options"};
+  desc.add_options()("vulkan", "Use Vulkan backend")("opengl",
+                                                     "Use OpenGL backend");
+  boost::program_options::variables_map vm;
+  boost::program_options::store(boost::program_options::parse_command_line(argc, argv, desc), vm);
+  boost::program_options::notify(vm);
   Lighthouse::Config config{
       .name = "EESG",
       .graphics = {.selection = Lighthouse::BackendSelection::FirstAvailable}};
-      config.AddBackend<Lighthouse::VulkanBackend>();
-      config.AddBackend<Lighthouse::OpenGLBackend>();
+  if (vm.count("vulkan"))
+    config.AddBackend<Lighthouse::VulkanBackend>();
+  if (vm.count("opengl"))
+    config.AddBackend<Lighthouse::OpenGLBackend>();
+  if (!vm.count("vulkan") && !vm.count("opengl")) {
+    config.AddBackend<Lighthouse::VulkanBackend>();
+    config.AddBackend<Lighthouse::OpenGLBackend>();
+  }
   return Run<EESG::EESGApplication>(config);
 }

@@ -146,10 +146,15 @@ layout(location=0) out vec4 color;void main(){color=tint.value;}
   commands->BindVertexBuffer(first->vertexBuffers[0].buffer,
                              sizeof(Mesh3DVertex));
   commands->BindIndexBuffer(first->indexBuffer->buffer);
+  std::vector<DrawIndexedIndirectCommand> draws;
   for (auto* mesh : {first, second})
-    commands->DrawIndexedRange(
-        mesh->indexCount, static_cast<unsigned>(mesh->indexBuffer->offset / 4),
-        static_cast<int>(mesh->vertexBuffers[0].offset / sizeof(Mesh3DVertex)));
+    draws.push_back({mesh->indexCount, 1,
+        static_cast<unsigned>(mesh->indexBuffer->offset / 4),
+        static_cast<int>(mesh->vertexBuffers[0].offset / sizeof(Mesh3DVertex)), 0});
+  const auto indirect = gpu->CreateBuffer({
+      .size = draws.size() * sizeof(draws[0]), .usage = BufferUsage::Indirect,
+      .initialData = std::as_bytes(std::span(draws))});
+  commands->MultiDrawIndexedIndirect(indirect, static_cast<unsigned>(draws.size()));
   commands->EndRendering();
   commands->End();
   // The interface promises descriptor/host updates before Submit are visible,
@@ -160,6 +165,7 @@ layout(location=0) out vec4 color;void main(){color=tint.value;}
   gpu->UpdateDescriptorSet(set, updated);
   gpu->Submit(*commands);
   auto pixels = gpu->ReadImage(image);
+  gpu->DestroyBuffer(indirect);
   for (auto x : {16u, 48u})
   {
     EXPECT_LT(std::to_integer<unsigned>(pixels[(24 * 64 + x) * 4]), 5u);

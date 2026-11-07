@@ -1,4 +1,4 @@
-#include "World/WorldTerrain.hpp"
+#include "World/Terrain/WorldTerrain.hpp"
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
