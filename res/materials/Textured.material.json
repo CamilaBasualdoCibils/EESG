@@ -1,0 +1,9 @@
+{
+  "shader": "Textured.glsl",
+  "base": "Unlit",
+  "parameters": {
+    "tint": { "type": "vec4", "default": [1.0, 1.0, 1.0, 1.0] },
+    "uvScale": { "type": "float", "default": 1.0 },
+    "albedo": { "type": "texture2D" }
+  }
+}

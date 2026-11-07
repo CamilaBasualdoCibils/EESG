@@ -7,13 +7,6 @@ struct SurfaceInput
     vec2 uv;
 };
 
-struct MaterialParameters
-{
-    vec4 baseColor;
-    vec4 emission;
-    vec4 custom[4];
-};
-
 struct UnlitSurface
 {
     vec3 color; // Linear RGB; no lighting is applied.

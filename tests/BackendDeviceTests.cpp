@@ -1,9 +1,9 @@
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Core/EngineRuntime.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
-#include <Lighthouse/Vulkan/VulkanBackend.hpp>
-#include <Lighthouse/Vulkan/VulkanCommandList.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanCommandList.hpp>
 #include <array>
 #include <gtest/gtest.h>
 
@@ -67,6 +67,102 @@ void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));gl_Position=vec
         {.image = image, .format = ImageFormat::RGBA8});
   }
 };
+TEST_P(HeadlessDeviceTests, MultipleColorAttachmentsClearAndDraw)
+{
+  const auto a = Target(), b = Target();
+  const auto av = View(a), bv = View(b);
+  const auto depth =
+      device->CreateImage({.width = 64,
+                           .height = 64,
+                           .format = ImageFormat::Depth24Stencil8,
+                           .usage = {ImageUsage::DepthStencilAttachment}});
+  const auto depthView = device->CreateImageView(
+      {.image = depth, .format = ImageFormat::Depth24Stencil8});
+  const auto vertex = Shader(Fullscreen, ShaderStage::Vertex);
+  const auto fragment = Shader(R"(#version 450
+layout(location=0) out vec4 first;
+layout(location=1) out vec4 second;
+void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
+)",
+                               ShaderStage::Fragment);
+  const auto layout = device->CreatePipelineLayout({});
+  const auto pipeline = device->CreatePipeline(
+      {.vertexShader = vertex,
+       .fragmentShader = fragment,
+       .colorFormats = {ImageFormat::RGBA8, ImageFormat::RGBA8},
+       .depthFormat = ImageFormat::Depth24Stencil8,
+       .layout = layout});
+  const auto commands = device->CreateCommandList(QueueType::Graphics);
+  commands->Begin();
+  commands->BeginRendering({.clearColor = true,
+                            .clearColorValue = {0, 0, 1},
+                            .width = 64,
+                            .height = 64,
+                            .colorAttachments = {av, bv}});
+  commands->EndRendering();
+  commands->End();
+  device->Submit(*commands);
+  for (auto image : {a, b})
+  {
+    const auto pixels = device->ReadImage(image);
+    EXPECT_GT(std::to_integer<unsigned>(pixels[2]), 250u);
+    EXPECT_LT(std::to_integer<unsigned>(pixels[0]), 5u);
+  }
+  commands->Clear();
+  commands->Begin();
+  commands->BeginRendering({.depthAttachment = depthView,
+                            .clearDepth = true,
+                            .width = 64,
+                            .height = 64,
+                            .colorAttachments = {av, bv}});
+  commands->SetStencil(StencilMode::Write, 3);
+  commands->BindPipeline(pipeline);
+  commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
+  commands->EndRendering();
+  commands->End();
+  device->Submit(*commands);
+  const auto first = device->ReadImage(a), second = device->ReadImage(b);
+  const auto center = (32 * 64 + 32) * 4;
+  EXPECT_GT(std::to_integer<unsigned>(first[center]), 250u);
+  EXPECT_LT(std::to_integer<unsigned>(first[center + 1]), 5u);
+  EXPECT_LT(std::to_integer<unsigned>(second[center]), 5u);
+  EXPECT_GT(std::to_integer<unsigned>(second[center + 1]), 250u);
+  // A mismatched ID must leave cleared pixels untouched, then the matching
+  // ID must draw even though its fullscreen depth equals the stored depth.
+  for (uint32_t reference : {2u, 3u})
+  {
+    commands->Clear();
+    commands->Begin();
+    commands->BeginRendering({.depthAttachment = depthView,
+                              .clearColor = true,
+                              .width = 64,
+                              .height = 64,
+                              .colorAttachments = {av, bv},
+                              .depthReadOnly = true});
+    commands->SetStencil(StencilMode::Equal, reference);
+    commands->BindPipeline(pipeline);
+    commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
+    commands->EndRendering();
+    commands->End();
+    device->Submit(*commands);
+    const auto red = device->ReadImage(a), green = device->ReadImage(b);
+    EXPECT_EQ(std::to_integer<unsigned>(red[center]),
+              reference == 3 ? 255u : 0u);
+    EXPECT_EQ(std::to_integer<unsigned>(green[center + 1]),
+              reference == 3 ? 255u : 0u);
+  }
+  device->WaitIdle();
+  device->DestroyPipeline(pipeline);
+  device->DestroyModule(fragment);
+  device->DestroyModule(vertex);
+  device->DestroyImageView(bv);
+  device->DestroyImageView(av);
+  device->DestroyImageView(depthView);
+  device->DestroyImage(depth);
+  device->DestroyImage(b);
+  device->DestroyImage(a);
+  device->DestroyPipelineLayout(layout);
+}
 TEST_P(HeadlessDeviceTests, SharedIndexedMeshesDepthAndLateDescriptorUpdates)
 {
   auto* gpu = device.get();
@@ -460,8 +556,8 @@ TEST(BackendRuntimePriorityTests, VulkanFirstWithRealFallback)
 {
   Config config;
   config.name = "Real backend fallback";
-  config.AddBackend<VulkanBackend>();
-  config.AddBackend<OpenGLBackend>();
+  config.AddRenderBackend<VulkanBackend>();
+  config.AddRenderBackend<OpenGLBackend>();
   EngineRuntime runtime;
   ASSERT_TRUE(runtime.Initialize(config));
   ASSERT_FALSE(runtime.BackendDiagnostics().empty());

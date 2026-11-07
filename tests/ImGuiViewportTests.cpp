@@ -1,8 +1,8 @@
 #if defined(LIGHTHOUSE_IMGUI) && defined(__linux__)
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
-#include <Lighthouse/Vulkan/VulkanBackend.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
 #include <gtest/gtest.h>
 #include <imgui.h>
 #define GLFW_INCLUDE_NONE

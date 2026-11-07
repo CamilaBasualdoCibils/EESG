@@ -1,0 +1,9 @@
+{
+  "shader": "Terrain.glsl",
+  "base": "Unlit",
+  "parameters": {
+    "darkColor": { "type": "vec3", "default": [0.16, 0.32, 0.12] },
+    "lightColor": { "type": "vec3", "default": [0.30, 0.48, 0.20] },
+    "frequency": { "type": "float", "default": 8.0 }
+  }
+}

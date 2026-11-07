@@ -1,11 +1,12 @@
+#include <Lighthouse/Backends/Input/GLFW/GLFWInputBackend.hpp>
 #include "Lighthouse/Engine/Core/Application.hpp"
 #include "Math/Types.hpp"
 #include "World/Entity/Transform.hpp"
 #include "World/WorldRenderer.hpp"
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Engine/Engine.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
-#include <Lighthouse/Vulkan/VulkanBackend.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
 #include <algorithm>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/trigonometric.hpp>
@@ -27,16 +28,26 @@ public:
   {
     // Release the technique while its World is still alive.
     GetRenderer().RemoveTechnique(m_worldRenderer);
+    // Materials/descriptors must be released before their sampled resources.
+    auto& device = *GetRenderer().GetRenderDevice();
+    device.WaitIdle();
+    GetRenderer().GetRenderGraph().Clear();
+    m_world.Registry().clear<MeshRender>();
+    m_helmetMaterials.reset();
+    if (m_helmetSampler) device.DestroySampler(m_helmetSampler);
+    for (auto view : m_helmetViews) device.DestroyImageView(view);
+    for (auto image : m_helmetImages) device.DestroyImage(image);
   }
   void OnStart() override
   {
     auto& renderer = GetRenderer();
     m_windowView = renderer.CreateWindowView(
         {.title = "EESG", .width = 1280, .height = 720, .decorated = true});
-    const auto asset = Lighthouse::Assets::LoadGLTF("../DragonAttenuation.gltf");
+    m_helmetAsset = Lighthouse::Assets::LoadGLTF("../DamagedHelmet.gltf");
+    const auto& asset = m_helmetAsset;
     if (asset.meshes.empty() || asset.meshes[0].vertices.empty())
       throw std::runtime_error("DamagedHelmet.gltf has no mesh");
-    const Lighthouse::Mesh3D& mesh3D = asset.meshes[1];
+    const Lighthouse::Mesh3D& mesh3D = asset.meshes[0];
     const auto meshHandle = renderer.UploadMesh(mesh3D);
     auto dragon = m_world.CreateEntity("dragon");
     auto& transform = dragon.Add<Transform>();
@@ -55,7 +66,38 @@ public:
     transform.SetRot(rotation);
     transform.SetScale(Vec3(scale));
     transform.SetPos(-(rotation * ((minimum + maximum) * (0.5f * scale))));
-    dragon.Add<MeshRender>(meshHandle);
+    auto& device = *renderer.GetRenderDevice();
+    m_helmetImages.reserve(asset.images.size());
+    for (const auto& image : asset.images)
+      m_helmetImages.push_back(device.CreateImage(image.ToImageDesc()));
+    // Explicit demo bindings from DamagedHelmet.gltf's material texture indices.
+    // General glTF material import remains outside the asset loader.
+    if (asset.textures.size() < 5) throw std::runtime_error("Helmet needs all five material textures");
+    for (size_t i = 0; i < 5; ++i)
+    {
+      const auto imageIndex = asset.textures[i].image;
+      if (imageIndex >= m_helmetImages.size()) throw std::runtime_error("Invalid helmet texture source");
+      m_helmetViews.push_back(device.CreateImageView({.image = m_helmetImages[imageIndex],
+          .format = asset.images[imageIndex].GetFormat()}));
+    }
+    m_helmetSampler = device.CreateSampler({
+        .minification = Lighthouse::SamplerFilter::Linear,
+        .magnification = Lighthouse::SamplerFilter::Linear,
+        .addressU = Lighthouse::SamplerAddressMode::Repeat,
+        .addressV = Lighthouse::SamplerAddressMode::Repeat});
+    m_helmetMaterials = std::make_unique<Materials>(device);
+    MaterialLoadOptions options;
+    options.textures["albedo"] = {m_helmetViews[0], m_helmetSampler};
+    options.textures["metallicRoughness"] = {m_helmetViews[1], m_helmetSampler};
+    options.textures["emissive"] = {m_helmetViews[2], m_helmetSampler};
+    options.textures["occlusion"] = {m_helmetViews[3], m_helmetSampler};
+    options.textures["normalMap"] = {m_helmetViews[4], m_helmetSampler};
+    auto material = m_helmetMaterials->Load("materials/Helmet.material.json")->Instantiate(options);
+    dragon.Add<MeshRender>(meshHandle, std::move(material));
+    auto overhead = m_world.CreateEntity("Overhead light");
+    overhead.Add<Transform>().SetRot(glm::quatLookAtRH(
+        -glm::normalize(Vec3(-0.25f, 1.0f, 0.45f)), Vec3(0, 0, 1)));
+    overhead.Add<Light>(Light{.type = LightType::Directional, .intensity = 3.0f});
     // Three blocky spheres in view of the temporary camera, spanning chunk
     // boundaries so the demo also exercises pooled chunk draws.
     for (const auto center : {Vec3(-1.05f, -0.65f, 0.3f),
@@ -201,6 +243,11 @@ public:
   }
 
 private:
+  Lighthouse::GLTFAsset m_helmetAsset;
+  std::vector<Lighthouse::ImageHandle> m_helmetImages;
+  std::vector<Lighthouse::ImageViewHandle> m_helmetViews;
+  Lighthouse::SamplerHandle m_helmetSampler{};
+  std::unique_ptr<Materials> m_helmetMaterials;
   World m_world{"MainWorld"};
   Lighthouse::RenderViewHandle m_windowView{};
   Lighthouse::RenderTechniqueHandle m_worldRenderer{};
@@ -221,13 +268,14 @@ int main(int argc, char** argv)
   Lighthouse::Config config{
       .name = "EESG",
       .graphics = {.selection = Lighthouse::BackendSelection::FirstAvailable}};
+  config.AddInputBackend<Lighthouse::GLFWInputBackend>();
   if (vm.count("vulkan"))
-    config.AddBackend<Lighthouse::VulkanBackend>();
+    config.AddRenderBackend<Lighthouse::VulkanBackend>();
   if (vm.count("opengl"))
-    config.AddBackend<Lighthouse::OpenGLBackend>();
+    config.AddRenderBackend<Lighthouse::OpenGLBackend>();
   if (!vm.count("vulkan") && !vm.count("opengl")) {
-    config.AddBackend<Lighthouse::VulkanBackend>();
-    config.AddBackend<Lighthouse::OpenGLBackend>();
+    config.AddRenderBackend<Lighthouse::VulkanBackend>();
+    config.AddRenderBackend<Lighthouse::OpenGLBackend>();
   }
   return Run<EESG::EESGApplication>(config);
 }

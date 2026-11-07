@@ -1,0 +1,11 @@
+{
+  "shader": "Helmet.glsl",
+  "base": "Lit",
+  "parameters": {
+    "albedo": { "type": "texture2D" },
+    "metallicRoughness": { "type": "texture2D" },
+    "normalMap": { "type": "texture2D" },
+    "occlusion": { "type": "texture2D" },
+    "emissive": { "type": "texture2D" }
+  }
+}
