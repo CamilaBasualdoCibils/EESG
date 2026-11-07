@@ -2,6 +2,7 @@
 
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <array>
+#include <boost/describe.hpp>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -10,7 +11,6 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
-#include <boost/describe.hpp>
 namespace EESG
 {
 struct alignas(16) MaterialFrameData

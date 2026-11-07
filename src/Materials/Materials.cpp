@@ -148,20 +148,22 @@ Materials::LoadShadingModel(SurfaceModel model)
       model == SurfaceModel::Lit
           ? "#version 450\n" +
                 ReadSource(m_resourceRoot /
-                           "materials/passes/EvaluateLight.glsl") +
+                           "materials/passes/Lit.deferred.EvaluateLight.glsl") +
                 "\n" +
                 ReadSource(m_resourceRoot /
-                           "materials/passes/LightVolume.vert.glsl")
+                           "materials/passes/Lit.deferred.vert.glsl")
           : ReadSource(m_resourceRoot /
-                       "materials/passes/DeferredLighting.vert.glsl");
+                       "materials/passes/Unlit.deferred.vert.glsl");
   shading->m_vertex = m_device.CreateShaderModule(
       ShaderCompiler::Compile(vertexSource, {.stage = ShaderStage::Vertex}));
   std::string lightingSource;
   if (model == SurfaceModel::Lit)
     lightingSource =
         "#version 450\n" +
-        ReadSource(m_resourceRoot / "materials/passes/EvaluateLight.glsl") +
-        "\n" + ReadSource(m_resourceRoot / "materials/passes/LitBRDF.glsl") +
+        ReadSource(m_resourceRoot /
+                   "materials/passes/Lit.deferred.EvaluateLight.glsl") +
+        "\n" +
+        ReadSource(m_resourceRoot / "materials/passes/Lit.deferred.BRDF.glsl") +
         "\n";
   lightingSource += ReadSource(
       m_resourceRoot / ("materials/passes/" + base + ".deferred.frag.glsl"));
@@ -246,12 +248,13 @@ Materials::Load(const std::filesystem::path& path)
   try
   {
     const auto vertex = ShaderCompiler::Compile(
-        ReadSource(m_resourceRoot / "materials/passes/Unlit.vert.glsl"),
+        ReadSource(m_resourceRoot /
+                   "materials/passes/Shared.gbuffer.vert.glsl"),
         {.stage = ShaderStage::Vertex});
     const auto fragment = ShaderCompiler::Compile(
         "#version 450\n" + material->source + "\n#line 1 2\n" +
             ReadSource(m_resourceRoot /
-                       ("materials/passes/" + base + ".frag.glsl")),
+                       ("materials/passes/" + base + ".gbuffer.frag.glsl")),
         {.stage = ShaderStage::Fragment});
     material->frameLayout = m_device.CreateDescriptorSetLayout(
         {.bindings = {{.binding = 0,
@@ -313,11 +316,9 @@ Materials::Load(const std::filesystem::path& path)
       const auto hit = ShaderCompiler::Compile(
           "#version 460\n#extension GL_EXT_ray_tracing : require\n#define "
           "EESG_RAY_TRACING\n" +
-              std::string(material->model == SurfaceModel::Lit
-                              ? "#define UnlitSurface LitSurface\n"
-                              : "") +
               material->source + "\n#line 1 2\n" +
-              ReadSource(m_resourceRoot / "materials/passes/Unlit.rchit.glsl"),
+              ReadSource(m_resourceRoot /
+                         ("materials/passes/" + base + ".rchit.glsl")),
           {.stage = ShaderStage::ClosestHit});
       material->m_rayLayout = m_device.CreatePipelineLayout(
           {.sets = {material->frameLayout, material->parametersLayout}});

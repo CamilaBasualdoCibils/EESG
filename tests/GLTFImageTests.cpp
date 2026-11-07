@@ -1,3 +1,7 @@
+#include "World/Entity/Light.hpp"
+#include "World/Entity/MeshRender.hpp"
+#include "World/Entity/Transform.hpp"
+#include "World/LightVolumes.hpp"
 #include "World/WorldRenderer.hpp"
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
@@ -242,8 +246,15 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
       transform.SetScale(Vec3(0.45f));
       other.Add<EESG::MeshRender>(meshHandle, unlit);
     }
+    auto player = world.CreateEntity("Player");
+    player.Add<EESG::Transform>().SetPos({0, 0, 3.6f});
+    player.Add<EESG::Player>().cameraView.SetResolution({128, 72});
+    Rejects([&] { player.Get<EESG::Player>().cameraView.SetResolution({0, 72}); });
+    auto secondPlayer = world.CreateEntity("Second player");
+    secondPlayer.Add<EESG::Transform>().SetPos({1, 0, 3.6f});
+    secondPlayer.Add<EESG::Player>().cameraView.SetResolution({64, 64});
     const auto technique = renderer.AddTechnique<EESG::WorldRenderer>(
-        &renderer, &world, UVec2{128, 72});
+        &renderer, &world);
     auto* worldRenderer = renderer.GetTechnique<EESG::WorldRenderer>(technique);
     worldRenderer->SetAmbientRadiance(Vec3(0));
     const auto output = gpu->CreateImage(
@@ -260,7 +271,7 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
         {
           struct Readback
           {
-            RenderGraphResource image, output;
+            RenderGraphResource image, secondImage, output;
           };
           auto* techniqueObject = static_cast<EESG::WorldRenderer*>(
               renderer.GetTechnique(technique.handle));
@@ -278,13 +289,21 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
               "Readback textured world",
               [&](RenderGraph::Builder& builder, Readback& data)
               {
-                data.image = builder.Read(techniqueObject->GetOutput());
+                Check(player.Get<EESG::Player>().cameraView.GetOutput() !=
+                      secondPlayer.Get<EESG::Player>().cameraView.GetOutput());
+                data.image = builder.Read(player.Get<EESG::Player>().cameraView.GetOutput());
+                data.secondImage = builder.Read(secondPlayer.Get<EESG::Player>().cameraView.GetOutput());
                 data.output = builder.Write(target);
                 builder.SetSideEffect();
               },
               [&](const Readback& data, FrameGraphPassResources& resources,
                   RenderGraphExecutePassContext& execute)
               {
+                const auto& firstDesc = resources.getDescriptor<RenderGraphImage>(data.image);
+                const auto& secondDesc = resources.getDescriptor<RenderGraphImage>(data.secondImage);
+                const auto expected = secondPlayer.Get<EESG::Player>().cameraView.GetResolution();
+                Check(firstDesc.width == 128 && firstDesc.height == 72);
+                Check(secondDesc.width == expected.x && secondDesc.height == expected.y);
                 const BlitRegion region{
                     .srcSubresource = {ImageAspect::Color, 0, 0, 1},
                     .srcOffsets = {{{0, 0, 0}, {128, 72, 1}}},
@@ -318,7 +337,7 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
         const auto end = line.find("<BR/>", start);
         resourceIDs.insert(line.substr(start, end - start));
       }
-      Check(resourceIDs.size() == 1);
+      Check(resourceIDs.size() == 2); // One shared attribute per camera.
     }
     renderer.Render();
     pixels = gpu->ReadImage(output);
@@ -350,9 +369,16 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
     Check(component(82, 0) < 200);
     Check(component(90, 0) > 250 && component(90, 1) > 250);
     const auto initial = pixels;
+    // A second camera can move and resize without altering this camera's image.
+    secondPlayer.Get<EESG::Transform>().SetPos({-1, 1, 2});
+    secondPlayer.Get<EESG::Player>().cameraView.SetResolution({80, 48});
     renderer.Compile();
     renderer.Render();
     Check(gpu->ReadImage(output) == initial);
+    player.Get<EESG::Transform>().SetPos({0.5f, 0, 3.6f});
+    renderer.Render();
+    Check(gpu->ReadImage(output) != initial);
+    player.Get<EESG::Transform>().SetPos({0, 0, 3.6f});
     const auto render = [&]
     {
       renderer.Render();

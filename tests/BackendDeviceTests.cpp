@@ -1,9 +1,11 @@
-#include <Lighthouse/Engine/Assets/Mesh.hpp>
-#include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
-#include <Lighthouse/Engine/Core/EngineRuntime.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanCommandList.hpp>
+#include <Lighthouse/Engine/Assets/Mesh.hpp>
+#include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
+#include <Lighthouse/Engine/Core/EngineRuntime.hpp>
+#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <algorithm>
 #include <array>
 #include <gtest/gtest.h>
 
@@ -624,6 +626,60 @@ void main(){color=texture(sourceImage,vec2(0.5));}
   EXPECT_LT(std::to_integer<unsigned>(pixels[(64 * 128 + 64) * 4 + 1]), 5u);
   EXPECT_GT(std::to_integer<unsigned>(pixels[(64 * 128 + 64) * 4 + 2]), 250u);
 }
+TEST_P(HeadlessDeviceTests, HDRPresentationStorageBlitsPreserveColorChannels)
+{
+  const auto destination = Target();
+  for (auto format :
+       {ImageFormat::RGB10A2, ImageFormat::BGR10A2, ImageFormat::RGBA16f})
+  {
+    const auto source = device->CreateImage(
+        {.width = 64,
+         .height = 64,
+         .format = format,
+         .usage = {ImageUsage::ColorAttachment, ImageUsage::TransferSource}});
+    const auto sourceView =
+        device->CreateImageView({.image = source, .format = format});
+    auto commands = device->CreateCommandList(QueueType::Graphics);
+    commands->Begin();
+    commands->BeginRendering({.colorAttachment = sourceView,
+                              .clearColor = true,
+                              .clearColorValue = {0.25f, 0.5f, 0.75f},
+                              .width = 64,
+                              .height = 64});
+    commands->EndRendering();
+    const BlitRegion region{.srcSubresource = {ImageAspect::Color, 0, 0, 1},
+                            .srcOffsets = {{{0, 0, 0}, {64, 64, 1}}},
+                            .dstSubresource = {ImageAspect::Color, 0, 0, 1},
+                            .dstOffsets = {{{0, 0, 0}, {64, 64, 1}}}};
+    commands->BlitImage(source, destination, region, ImageFilter::Nearest);
+    commands->End();
+    device->Submit(*commands);
+    const auto pixels = device->ReadImage(destination);
+    ASSERT_GE(pixels.size(), 4u);
+    EXPECT_NEAR(std::to_integer<unsigned>(pixels[0]), 64, 2);
+    EXPECT_NEAR(std::to_integer<unsigned>(pixels[1]), 128, 2);
+    EXPECT_NEAR(std::to_integer<unsigned>(pixels[2]), 191, 2);
+    device->DestroyImageView(sourceView);
+    device->DestroyImage(source);
+  }
+  device->DestroyImage(destination);
+}
+
+TEST_P(HeadlessDeviceTests,
+       RejectsEmptyPresentationPreferencesWithoutOpeningWindow)
+{
+  WindowManager windows;
+  EXPECT_FALSE(device->GetSwapchainInfo({}).has_value());
+  EXPECT_THROW(
+      windows.EnumerateAvailableSwapchainFormats(WindowHandle{}, *device),
+      std::invalid_argument);
+  Renderer renderer(std::move(device), &windows);
+  EXPECT_THROW(
+      renderer.CreateWindowView(RenderWindowDesc{.swapchainFormats = {}}),
+      std::invalid_argument);
+  EXPECT_FALSE(windows.IsAvailable());
+}
+
 INSTANTIATE_TEST_SUITE_P(Backends, HeadlessDeviceTests,
                          testing::Values(false, true), [](const auto& info)
                          { return info.param ? "Vulkan14" : "OpenGL"; });
@@ -713,6 +769,68 @@ protected:
     HeadlessDeviceTests::SetUp();
   }
 };
+TEST_P(WindowDeviceTests, OrderedSwapchainFormatPreferences)
+{
+  WindowManager windows;
+  const auto available = windows.EnumerateAvailableSwapchainFormats(
+      *device, WindowDesc{.title = "Format probe", .width = 64, .height = 64});
+  ASSERT_FALSE(available.empty());
+  EXPECT_NE(
+      std::find(available.begin(), available.end(), SwapchainFormat::SRGB),
+      available.end());
+  Renderer renderer(std::move(device), &windows);
+  // A preference outside the advertised set must be skipped, not cause SDR
+  // to be chosen before the first supported entry in the caller's order.
+  const auto unsupported = static_cast<SwapchainFormat>(999);
+  std::vector<SwapchainFormat> preferences{unsupported};
+  preferences.insert(preferences.end(), available.rbegin(), available.rend());
+  const auto handle = renderer.CreateWindowView(
+      RenderWindowDesc{.title = "Ordered format regression",
+                       .width = 64,
+                       .height = 64,
+                       .visible = false,
+                       .swapchainFormats = preferences});
+  auto* view = renderer.GetView<WindowView>(handle);
+  ASSERT_NE(view, nullptr);
+  EXPECT_EQ(view->presentation.format, available.back());
+  EXPECT_EQ(view->GetSwapchainInfo().format, available.back());
+  EXPECT_NE(view->GetSwapchainInfo().imageFormat, ImageFormat::Undefined);
+  const auto nativeFormats = windows.EnumerateAvailableSwapchainFormats(
+      view->window, *renderer.GetRenderDevice());
+  EXPECT_NE(
+      std::find(nativeFormats.begin(), nativeFormats.end(), available.back()),
+      nativeFormats.end());
+  auto* gpu = renderer.GetRenderDevice();
+  for (unsigned frame = 0; frame < 2; ++frame)
+  {
+    const auto image = gpu->AcquireSwapchainImage(view->swapchain);
+    const auto size = view->GetWindow()->GetFramebufferSize();
+    auto commands = gpu->CreateCommandList(QueueType::Graphics);
+    commands->Begin();
+    commands->BeginRendering({.colorAttachment = image.view,
+                              .clearColor = true,
+                              .clearColorValue = {0.25f, 0.5f, 0.75f},
+                              .width = size.width,
+                              .height = size.height});
+    commands->EndRendering();
+    commands->End();
+    gpu->Submit(*commands);
+    gpu->Present(view->swapchain);
+    glfwSetWindowSize(
+        static_cast<GLFWwindow*>(view->GetWindow()->NativeHandle()), 80, 72);
+    windows.PollEvents();
+    EXPECT_EQ(gpu->GetSwapchainInfo(view->swapchain)->format, available.back());
+  }
+  EXPECT_THROW(renderer.CreateWindowView(
+                   RenderWindowDesc{.title = "No implicit fallback",
+                                    .visible = false,
+                                    .swapchainFormats = {unsupported}}),
+               std::runtime_error);
+  const auto swapchain = view->swapchain;
+  EXPECT_TRUE(renderer.DestroyView(handle));
+  EXPECT_FALSE(gpu->GetSwapchainInfo(swapchain).has_value());
+}
+
 TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
 {
   const auto survivingImage=Target();

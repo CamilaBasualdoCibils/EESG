@@ -43,7 +43,9 @@ target_link_libraries(EESG PRIVATE
 if(EESG_BUILD_TESTING)
     enable_testing()
     add_executable(EESGGLTFImageTests tests/GLTFImageTests.cpp
-        src/World/World.cpp src/World/Entity/Entity.cpp)
+        src/World/World.cpp src/World/Entity/Entity.cpp
+        src/World/WorldRenderer.cpp src/World/EntityRenderer.cpp
+        src/World/Terrain/TerrainRenderer.cpp)
     target_compile_definitions(EESGGLTFImageTests PRIVATE EESG_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(EESGGLTFImageTests PRIVATE EESGMaterials Lighthouse::OpenGLBackend
         Lighthouse::VulkanBackend nlohmann_json::nlohmann_json)
