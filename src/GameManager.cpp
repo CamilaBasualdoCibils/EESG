@@ -17,15 +17,21 @@
 
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
-#include <imgui.h>
-#include <implot.h>
+#include <Lighthouse/Engine/Tools/InputSystemTool.hpp>
+#include <Lighthouse/Engine/Tools/RendererTool.hpp>
+#include "Editor/EntitySystemTool.hpp"
+#include "Editor/TerrainTool.hpp"
 #endif
 
 namespace EESG
 {
 GameManager::~GameManager()
 {
+#ifdef LIGHTHOUSE_IMGUI
+  GetToolBox().Clear();
+#endif
   GetInputSystem().RemoveActionSet(m_gameplay);
+  GetInputSystem().RemoveActionSet(m_editor);
   // Release the technique while its World is still alive.
   GetRenderer().RemoveTechnique(m_worldRenderer);
   // Materials/descriptors must be released before their sampled resources.
@@ -162,66 +168,38 @@ void GameManager::OnStart()
   m_look->Bind(mouse, Control::Delta(Lighthouse::MouseAxis::X), {1, 0});
   m_look->Bind(mouse, Control::Delta(Lighthouse::MouseAxis::Y), {0, 1});
   GetWindowManager().SetCursorMode(window, Lighthouse::CursorMode::Captured);
+  m_editor = input.CreateActionSet("Editor");
+  auto toggleCursor = m_editor->AddAction("ToggleCursor", Lighthouse::InputActionType::Button);
+  toggleCursor->Bind(keyboard, Control::Button(Key::Escape));
+  toggleCursor->OnPressed([this, window] {
+    m_cursorCaptured = !m_cursorCaptured;
+    GetWindowManager().SetCursorMode(window, m_cursorCaptured ? Lighthouse::CursorMode::Captured : Lighthouse::CursorMode::Normal);
+  });
+  m_editor->SetEnabled(true);
   m_gameplay->SetEnabled(true);
   m_worldRenderer =
       renderer.AddTechnique<WorldRenderer>(&renderer, &m_world, m_windowView)
           .handle;
 #ifdef LIGHTHOUSE_IMGUI
-  renderer.CreateView<Lighthouse::ImGuiView>(
-      [this, dragon = dragon, leftPointLight = leftPointLight,
-       dirLight = overhead]() mutable
-      {
-        ImGui::ShowDemoWindow();
-        ImPlot::ShowDemoWindow();
-
-        ImGui::Begin("Dragon Info");
-        const auto renderSize =
-            m_player.Get<Player>().cameraView.GetResolution();
-        int resolution[]{static_cast<int>(renderSize.x),
-                         static_cast<int>(renderSize.y)};
-        if (ImGui::DragInt2("Render resolution", resolution, 16.0f, 64, 4096))
-        {
-          m_player.Get<Player>().cameraView.SetResolution(
-              {static_cast<unsigned>(std::clamp(resolution[0], 64, 4096)),
-               static_cast<unsigned>(std::clamp(resolution[1], 64, 4096))});
-          m_recompile = true;
-        }
-
-        Vec3 position = dragon.Get<Transform>().GetPos();
-        Vec3 rotation =
-            glm::degrees(glm::eulerAngles(dragon.Get<Transform>().GetRot()));
-        Vec3 scale = dragon.Get<Transform>().GetScale();
-        if (ImGui::DragFloat3("Position", &position.x, 0.1f))
-          dragon.Get<Transform>().SetPos(position);
-        if (ImGui::DragFloat3("Rotation", &rotation.x, 0.1f))
-          dragon.Get<Transform>().SetRot(glm::quat(glm::radians(rotation)));
-        if (ImGui::DragFloat3("Scale", &scale.x, 0.1f))
-          dragon.Get<Transform>().SetScale(scale);
-        ImGui::Separator();
-        Vec3 leftLightPos = leftPointLight.Get<Transform>().GetPos();
-        if (ImGui::DragFloat3("Left light position", &leftLightPos.x, 0.1f))
-          leftPointLight.Get<Transform>().SetPos(leftLightPos);
-        ImGui::DragFloat("Left light intensity",
-                         &leftPointLight.Get<Light>().intensity, 0.1f);
-        ImGui::DragFloat("Left light range", &leftPointLight.Get<Light>().range,
-                         0.1f, 0.0f);
-        Vec3 dirLightPos = dirLight.Get<Transform>().GetPos();
-        if (ImGui::DragFloat3("Directional light position", &dirLightPos.x,
-                              0.1f))
-          dirLight.Get<Transform>().SetPos(dirLightPos);
-        ImGui::DragFloat("Directional light intensity",
-                         &dirLight.Get<Light>().intensity, 0.1f);
-
-        ImGui::End();
-      });
+  GetToolBox().AddTool<Lighthouse::InputSystemTool>();
+  GetToolBox().AddTool<TerrainTool>(m_world, [this] {
+    return static_cast<WorldRenderer*>(GetRenderer().GetTechnique(m_worldRenderer))->TerrainStats();
+  },[this](size_t count) {
+    static_cast<WorldRenderer*>(GetRenderer().GetTechnique(m_worldRenderer))->SetTerrainMeshingThreadCount(count);
+  });
+  GetToolBox().AddTool<EntitySystemTool>(m_world, [this] { m_recompile = true; });
+  GetToolBox().AddTool<Lighthouse::RendererTool>();
+  const auto imgui = renderer.CreateView<Lighthouse::ImGuiView>();
+  renderer.GetView<Lighthouse::ImGuiView>(imgui)->AddObject(GetToolBox());
 #endif
   const auto size = renderer.GetView<Lighthouse::WindowView>(m_windowView)
                         ->GetWindow()
                         ->GetFramebufferSize();
   m_width = size.width;
   m_height = size.height;
+  m_world.UpdateTerrain();
+  static_cast<WorldRenderer*>(renderer.GetTechnique(m_worldRenderer))->UpdateTerrainMeshes();
   renderer.Compile();
-  m_terrainRevision = m_world.GetTerrain().revision();
   std::cout << renderer.GetRenderGraph().Dot() << '\n';
 }
 void GameManager::OnUpdate(float deltaTime)
@@ -233,12 +211,15 @@ void GameManager::OnUpdate(float deltaTime)
   if (!size.width || !size.height)
     return;
   auto* window = renderer.GetView<Lighthouse::WindowView>(m_windowView)->GetWindow();
-  const bool acceptInput = window->IsFocused() && m_gameplay->IsEnabled();
-  m_gameplay->SetEnabled(window->IsFocused());
+  const bool acceptInput = m_cursorCaptured && window->IsFocused() && m_gameplay->IsEnabled();
+  m_gameplay->SetEnabled(m_cursorCaptured && window->IsFocused());
   auto& transform = m_player.Get<Transform>();
   if (acceptInput) {
     const auto look = m_look->GetAxis2D();
     constexpr float sensitivity = 0.002f; // Radians per cursor unit.
+    const Vec3 direction = transform.GetRot() * Vec3(0, 0, -1);
+    m_cameraYaw = std::atan2(-direction.x, -direction.z);
+    m_cameraPitch = std::asin(std::clamp(direction.y, -1.f, 1.f));
     m_cameraYaw = std::remainder(m_cameraYaw - look.x * sensitivity, glm::two_pi<float>());
     m_cameraPitch = std::clamp(m_cameraPitch - look.y * sensitivity,
                                -glm::radians(89.f), glm::radians(89.f));
@@ -258,11 +239,12 @@ void GameManager::OnUpdate(float deltaTime)
   transform.SetPos(transform.GetPos() + movement * (flySpeed * deltaTime));
   static_cast<WorldRenderer*>(renderer.GetTechnique(m_worldRenderer))
       ->SetDeltaTime(deltaTime);
-  if (m_world.GetTerrain().revision() != m_terrainRevision || m_recompile ||
+  m_world.UpdateTerrain();
+  static_cast<WorldRenderer*>(renderer.GetTechnique(m_worldRenderer))->UpdateTerrainMeshes();
+  if (m_recompile ||
       size.width != m_width || size.height != m_height)
   {
     renderer.Compile();
-    m_terrainRevision = m_world.GetTerrain().revision();
     m_recompile = false;
     m_width = size.width;
     m_height = size.height;

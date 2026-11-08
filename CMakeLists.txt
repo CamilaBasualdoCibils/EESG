@@ -23,6 +23,7 @@ file(GLOB_RECURSE _EESG_sources CONFIGURE_DEPENDS
 )
 
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 add_library(EESGMaterials src/Materials/Materials.cpp src/Materials/MaterialDefinition.cpp)
 target_include_directories(EESGMaterials PUBLIC src)
 target_compile_definitions(EESGMaterials PRIVATE
@@ -35,6 +36,7 @@ target_include_directories(EESG PRIVATE src)
 target_link_libraries(EESG PRIVATE
     EESGMaterials
     Lighthouse::Engine
+    Threads::Threads
     Lighthouse::GLFWInputBackend
     Lighthouse::OpenGLBackend
     Lighthouse::VulkanBackend
@@ -48,7 +50,7 @@ if(EESG_BUILD_TESTING)
         src/World/Terrain/TerrainRenderer.cpp)
     target_compile_definitions(EESGGLTFImageTests PRIVATE EESG_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(EESGGLTFImageTests PRIVATE EESGMaterials Lighthouse::OpenGLBackend
-        Lighthouse::VulkanBackend nlohmann_json::nlohmann_json)
+        Threads::Threads Lighthouse::VulkanBackend nlohmann_json::nlohmann_json)
     add_test(NAME EESGGLTFImageTests COMMAND EESGGLTFImageTests)
     add_executable(EESGMaterialTests tests/MaterialTests.cpp)
     target_link_libraries(EESGMaterialTests PRIVATE EESGMaterials
@@ -62,10 +64,30 @@ if(EESG_BUILD_TESTING)
     target_include_directories(EESGOctreeTests PRIVATE src/Types)
     add_test(NAME EESGOctreeTests COMMAND EESGOctreeTests)
 
+    add_executable(EESGTerrainStreamingTests tests/TerrainStreamingTests.cpp
+        src/World/World.cpp src/World/Entity/Entity.cpp)
+    target_include_directories(EESGTerrainStreamingTests PRIVATE src)
+    target_link_libraries(EESGTerrainStreamingTests PRIVATE Lighthouse::Engine)
+    add_test(NAME EESGTerrainStreamingTests COMMAND EESGTerrainStreamingTests)
+
+    add_executable(EESGTerrainMeshUpdateTests tests/TerrainMeshUpdateTests.cpp)
+    target_include_directories(EESGTerrainMeshUpdateTests PRIVATE src)
+    target_link_libraries(EESGTerrainMeshUpdateTests PRIVATE Lighthouse::Engine Threads::Threads)
+    add_test(NAME EESGTerrainMeshUpdateTests COMMAND EESGTerrainMeshUpdateTests)
+
+    add_executable(EESGTerrainSurfaceTests tests/TerrainSurfaceTests.cpp)
+    target_include_directories(EESGTerrainSurfaceTests PRIVATE src)
+    target_link_libraries(EESGTerrainSurfaceTests PRIVATE Lighthouse::Engine)
+    add_test(NAME EESGTerrainSurfaceTests COMMAND EESGTerrainSurfaceTests)
+
     add_executable(EESGWorldTerrainTests tests/WorldTerrainTests.cpp)
     target_include_directories(EESGWorldTerrainTests PRIVATE src)
     target_link_libraries(EESGWorldTerrainTests PRIVATE Lighthouse::Engine)
     add_test(NAME EESGWorldTerrainTests COMMAND EESGWorldTerrainTests)
+
+    # Deadlock regressions use deliberately gated workers; fail boundedly if
+    # a future change accidentally makes the render-side call wait for them.
+    set_tests_properties(EESGTerrainStreamingTests EESGTerrainMeshUpdateTests PROPERTIES TIMEOUT 30)
 
     find_package(GTest CONFIG REQUIRED)
     add_executable(EESGBackendTests tests/BackendDeviceTests.cpp tests/ImGuiViewportTests.cpp

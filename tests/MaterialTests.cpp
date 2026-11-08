@@ -8,6 +8,7 @@
 #include <chrono>
 #include <fstream>
 #include <stdexcept>
+#include <thread>
 
 using namespace EESG;
 static void Check(bool condition)
@@ -41,11 +42,12 @@ void TestLoading(Lighthouse::IRenderDevice& device)
   Check(solid->source.find("struct UnlitSurface") != std::string::npos);
   Check(solid->source.find("evaluateMaterial") != std::string::npos);
   const auto terrain = materials.Load("materials/Terrain.material.json");
-  Check(terrain->shadingModel == solid->shadingModel);
+  Check(terrain->model == SurfaceModel::Lit);
   Check(terrain->gBufferPipeline != solid->gBufferPipeline);
   Check(solid->shadingModel->attributes == std::vector{GBufferAttribute::Color});
   const auto lit = materials.Load("materials/Helmet.material.json");
   Check(lit->model == SurfaceModel::Lit);
+  Check(terrain->shadingModel == lit->shadingModel);
   Check(lit->shadingModel != solid->shadingModel);
   Check(lit->shadingModel->attributes.front() == GBufferAttribute::Color);
   Check(lit->shadingModel->attributes.size() == 5);
@@ -119,11 +121,16 @@ void TestTerrainPixels(
   const auto material = materials.Load(path);
   const auto instance = material->Instantiate(options);
   WorldTerrain terrain;
-  // Two source chunks, on opposite sides of x=0, drawn in one multidraw.
+  // Two source chunks on opposite sides of x=0 share one geometry buffer.
   terrain.set_voxel({-4, 0, 0}, {1, 1});
   terrain.set_voxel({3, 0, 0}, {1, 1});
   TerrainMeshPool pool(device);
-  pool.Rebuild(terrain);
+  const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+  do {
+    pool.Update(terrain);
+    Check(std::chrono::steady_clock::now()<deadline);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while(pool.Stats().pending || pool.Stats().chunks!=2);
   const MaterialFrameData camera{};
   const auto uniform = device.CreateBuffer(
       {.size = sizeof(camera),
@@ -142,7 +149,7 @@ void TestTerrainPixels(
   {
     const auto format = GBufferAttributes[static_cast<size_t>(attribute)].format;
     attributes.push_back(device.CreateImage({.width = 128, .height = 128, .format = format,
-        .usage = {ImageUsage::ColorAttachment, ImageUsage::Sampled}}));
+        .usage = {ImageUsage::ColorAttachment, ImageUsage::Sampled, ImageUsage::TransferSource}}));
     views.push_back(device.CreateImageView({.image = attributes.back(), .format = format}));
   }
   const auto image = device.CreateImage({.width = 128, .height = 128, .format = ImageFormat::RGBA16f,
@@ -176,6 +183,10 @@ void TestTerrainPixels(
     lightingWrites.push_back({.binding = static_cast<uint32_t>(material->shadingModel->attributes[i]),
         .resource = DescriptorImageInfo{views[i], sampler}});
   device.UpdateDescriptorSet(lightingSet, lightingWrites);
+  // Lit materials validate their G-buffer albedo here; full lighting is
+  // exercised by the WorldRenderer GPU image tests.
+  if (material->model == SurfaceModel::Unlit)
+  {
   commands->Clear();
   commands->Begin();
   commands->BeginRendering({.colorAttachment = view, .depthAttachment = depthView,
@@ -187,6 +198,7 @@ void TestTerrainPixels(
   commands->EndRendering();
   commands->End();
   device.Submit(*commands);
+  }
   const auto readback = device.CreateImage({.width=128,.height=128,.format=ImageFormat::RGBA8,
       .usage={ImageUsage::TransferSource,ImageUsage::TransferDestination}});
   commands->Clear();
@@ -194,7 +206,7 @@ void TestTerrainPixels(
   const Lighthouse::BlitRegion region{
       .srcSubresource={ImageAspect::Color,0,0,1}, .srcOffsets={{{0,0,0},{128,128,1}}},
       .dstSubresource={ImageAspect::Color,0,0,1}, .dstOffsets={{{0,0,0},{128,128,1}}}};
-  commands->BlitImage(image,readback,region,ImageFilter::Nearest);
+  commands->BlitImage(material->model==SurfaceModel::Lit ? attributes.front() : image,readback,region,ImageFilter::Nearest);
   commands->End();
   device.Submit(*commands);
   const auto pixels = device.ReadImage(readback);

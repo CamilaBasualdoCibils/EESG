@@ -1,6 +1,6 @@
 {
   "shader": "Terrain.glsl",
-  "base": "Unlit",
+  "base": "Lit",
   "parameters": {
     "darkColor": { "type": "vec3", "default": [0.16, 0.32, 0.12] },
     "lightColor": { "type": "vec3", "default": [0.30, 0.48, 0.20] },

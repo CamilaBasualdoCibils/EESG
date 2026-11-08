@@ -13,7 +13,7 @@ public:
   void OnUpdate(float deltaTime) override;
 
 private:
-  std::shared_ptr<Lighthouse::InputActionSet> m_gameplay;
+  std::shared_ptr<Lighthouse::InputActionSet> m_gameplay, m_editor;
   std::shared_ptr<Lighthouse::InputAction> m_move, m_elevate, m_look;
   float m_cameraYaw{}, m_cameraPitch{};
   Lighthouse::GLTFAsset m_helmetAsset;
@@ -26,7 +26,7 @@ private:
   Lighthouse::RenderViewHandle m_windowView{};
   Lighthouse::RenderTechniqueHandle m_worldRenderer{};
   std::uint32_t m_width{}, m_height{};
-  uint64_t m_terrainRevision{};
   bool m_recompile{};
+  bool m_cursorCaptured{true};
 };
 } // namespace EESG

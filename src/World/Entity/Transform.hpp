@@ -1,4 +1,5 @@
 #pragma once
+#include "Component.hpp"
 
 #include "Math/Types.hpp"
 #include "World/Entity/Entity.hpp"
@@ -9,6 +10,7 @@
 namespace EESG {
 
 class Transform {
+
     Vec3 position{};
     Quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
     Vec3 scale{1.0f, 1.0f, 1.0f};
@@ -16,6 +18,15 @@ class Transform {
     mutable std::optional<Mat4> matrix;
     std::optional<EntityID> parent;
 public:
+    EESG_COMPONENT_INSPECTOR(Transform, {
+    auto position = component.GetPos();
+    auto rotation = glm::degrees(component.GetRotEuler());
+    auto scale = component.GetScale();
+    if (ImGui::DragFloat3("Position", &position.x, .1f)) component.SetPos(position);
+    if (ImGui::DragFloat3("Rotation", &rotation.x, .5f)) component.SetRotEuler(glm::radians(rotation));
+    if (ImGui::DragFloat3("Scale", &scale.x, .01f)) component.SetScale(scale);
+    return false;
+})
     Transform() = default;
     Transform(Vec3 p,Quat r = Quat(), Vec3 s = Vec3(1.0f, 1.0f, 1.0f))
         : position(p), rotation(r), scale(s) {}

@@ -15,6 +15,9 @@ public:
                 Lighthouse::RenderViewHandle window = {});
   ~WorldRenderer() override;
   void BuildGraph(Lighthouse::TechniqueBuildContext& context) override;
+  void UpdateTerrainMeshes() { m_terrain.Update(); }
+  void SetTerrainMeshingThreadCount(size_t count) { m_terrain.SetMeshingThreadCount(count); }
+  TerrainMeshStats TerrainStats() const { return m_terrain.Stats(); }
   void SetAmbientRadiance(Vec3 radiance);
   void SetDeltaTime(float value) noexcept
   {

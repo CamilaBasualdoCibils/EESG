@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#include <memory>
+#include <memory_resource>
 
 namespace EESG {
 
@@ -79,7 +81,10 @@ public:
 
   // depth is a runtime terrain/chunk choice, not a C++ type parameter.
   // Finest cells have extent 1. A depth-0 tree holds one cell.
-  explicit AdaptiveOctree(uint32_t depth) : depth_(depth) {
+  explicit AdaptiveOctree(uint32_t depth,
+      std::shared_ptr<std::pmr::memory_resource> resource = {})
+      : resource_(std::move(resource)), depth_(depth),
+        topology_(Resource()), slots_(Resource()), cells_(Resource()), summaries_(Resource()) {
     if (depth > 31)
       throw std::invalid_argument("Octree depth must be <= 31");
     slots_.resize(1);
@@ -92,6 +97,10 @@ public:
   AdaptiveOctree(AdaptiveOctree &&) = delete;
   AdaptiveOctree &operator=(AdaptiveOctree &&) = delete;
 
+  std::shared_ptr<std::pmr::memory_resource> memory_resource() const noexcept
+  {
+    return resource_;
+  }
   uint32_t depth() const noexcept { return depth_; }
   uint32_t extent() const noexcept { return uint32_t{1} << depth_; }
   bool empty() const noexcept { return !live(0); }
@@ -220,8 +229,9 @@ private:
     uint32_t octant = 0;
   };
   template <class T> struct PayloadPool {
-    std::vector<T> values;
-    std::vector<uint32_t> links;
+    explicit PayloadPool(std::pmr::memory_resource* resource) : values(resource), links(resource) {}
+    std::pmr::vector<T> values;
+    std::pmr::vector<uint32_t> links;
     uint32_t free = null;
     uint32_t acquire(const T &value) {
       if constexpr (std::is_same_v<T, NoOctreePayload>)
@@ -258,12 +268,16 @@ private:
   };
   static_assert(!std::is_same_v<Cell, NoOctreePayload>,
                 "A terrain terminal needs a payload");
+  std::shared_ptr<std::pmr::memory_resource> resource_;
+  std::pmr::memory_resource* Resource() const noexcept {
+    return resource_ ? resource_.get() : std::pmr::get_default_resource();
+  }
   uint32_t depth_;
   size_t terminalCount_ = 0;
   uint64_t version_ = 0;
   uint32_t freeBlock_ = null;
-  std::vector<GpuNode> topology_;
-  std::vector<Slot> slots_; // CPU-only edit metadata, never uploaded
+  std::pmr::vector<GpuNode> topology_;
+  std::pmr::vector<Slot> slots_; // CPU-only edit metadata, never uploaded
   PayloadPool<Cell> cells_;
   PayloadPool<Summary> summaries_;
 

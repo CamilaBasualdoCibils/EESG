@@ -15,6 +15,7 @@
 #include <source_location>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <stdexcept>
 
 using namespace Lighthouse;
@@ -490,6 +491,30 @@ void TestTexturedWorld(std::unique_ptr<IRenderDevice> device,
     pixels = gpu->ReadImage(output);
     Check(pixels !=
           initial); // Updated model matrix reaches the material shader.
+    // Terrain edits update draw ranges in one persistent buffer. The same
+    // compiled graph must display newly uploaded chunks and remove them again.
+    auto meshes = world.Registry().view<EESG::MeshRender, EESG::Transform>();
+    for (auto id : meshes) meshes.get<EESG::Transform>(id).SetPos({1000,0,0});
+    renderer.Render();
+    const auto emptyTerrain = gpu->ReadImage(output);
+    const auto terrainGraph = renderer.GetRenderGraph().Dot();
+    world.GetTerrain().apply({{-1,-1,0,0},{252,252,0},6,{1,1}});
+    world.GetTerrain().apply({{0,-1,0,0},{0,252,0},6,{1,1}});
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    do
+    {
+      worldRenderer->UpdateTerrainMeshes();
+      Check(std::chrono::steady_clock::now()<deadline);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (worldRenderer->TerrainStats().pending || worldRenderer->TerrainStats().chunks!=2);
+    renderer.Render();
+    Check(gpu->ReadImage(output)!=emptyTerrain);
+    Check(renderer.GetRenderGraph().Dot()==terrainGraph);
+    world.GetTerrain().clear();
+    worldRenderer->UpdateTerrainMeshes();
+    renderer.Render();
+    Check(gpu->ReadImage(output)==emptyTerrain);
+    Check(renderer.GetRenderGraph().Dot()==terrainGraph);
     renderer.RemoveTechnique(readback);
     renderer.RemoveTechnique(technique);
     renderer.GetRenderGraph().Clear();

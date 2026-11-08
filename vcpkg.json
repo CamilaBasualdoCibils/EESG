@@ -33,6 +33,7 @@
       ]
     },
     "implot",
+    "imgui-node-editor",
     {
       "name": "glfw3",
       "features": [

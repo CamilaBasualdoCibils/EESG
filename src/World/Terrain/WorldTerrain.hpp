@@ -225,6 +225,22 @@ public:
     if (!std::isfinite(edit.value.density) || edit.value.density < 0 ||
         edit.value.density > 1)
       throw std::invalid_argument("Terrain density must be in [0,1]");
+    edits_[edit.chunk].push_back(edit);
+    // Meshing jobs retain immutable source snapshots. Only authored edits
+    // need copy-on-write; procedural installation is a pointer swap.
+    if (auto existing = chunks_.find(edit.chunk);
+        existing != chunks_.end() && !existing->second.unique())
+    {
+      auto copy = std::make_shared<TerrainRegion::Tree>(
+          chunk_depth, existing->second->memory_resource());
+      existing->second->visit(
+          [&](const TerrainRegion::Tree::Entry& entry)
+          {
+            if (entry.terminal)
+              copy->paint(entry.region, existing->second->cell(entry.handle));
+          });
+      existing->second = std::move(copy);
+    }
     auto it = chunks_.find(edit.chunk);
     if (it == chunks_.end())
     {
@@ -244,6 +260,7 @@ public:
         chunks_.erase(it);
     }
     ++revision_;
+    MarkSourceChanged(edit.chunk, &edit);
     // Every loaded ancestor is a derived representation of the edited chunk.
     // Invalidating removes it immediately; there are no stale sample results.
     for (auto cache = loaded_.begin(); cache != loaded_.end();)
@@ -253,6 +270,100 @@ public:
       else
         ++cache;
     }
+  }
+
+  // Install disposable procedural data, then replay authoritative user edits.
+  // Even edits to air are retained, so refinement/reloading cannot undo them.
+  void SetGeneratedSource(RegionKey key, uint32_t lod,
+                          std::unique_ptr<TerrainRegion::Tree> data)
+  {
+    validate(key);
+    if (key.scale || lod > chunk_depth || !data || data->depth() != chunk_depth)
+      throw std::invalid_argument("Invalid generated base chunk");
+    data->visit([&](const TerrainRegion::Tree::Entry& entry) {
+      if (!entry.terminal) return;
+      const auto density = data->cell(entry.handle).density;
+      if (!std::isfinite(density) || density < 0 || density > 1)
+        throw std::invalid_argument("Invalid generated occupancy");
+    });
+    ReplayEdits(key, *data);
+    chunks_.insert_or_assign(key, std::move(data));
+    generatedLOD_.insert_or_assign(key, lod);
+    loaded_.clear();
+    ++revision_;
+    MarkSourceChanged(key);
+  }
+  void RemoveGeneratedSource(RegionKey key)
+  {
+    if (!generatedLOD_.erase(key)) return;
+    auto data = std::make_unique<TerrainRegion::Tree>(chunk_depth);
+    ReplayEdits(key, *data);
+    if (data->empty()) chunks_.erase(key);
+    else chunks_.insert_or_assign(key, std::move(data));
+    loaded_.clear();
+    ++revision_;
+    MarkSourceChanged(key);
+  }
+  struct RetiredSources
+  {
+    std::vector<std::shared_ptr<TerrainRegion::Tree>> trees;
+    std::vector<std::unique_ptr<TerrainRegion>> views;
+    bool empty() const
+    {
+      return trees.empty() && views.empty();
+    }
+  };
+  uint64_t clear_revision() const noexcept
+  {
+    return clearRevision_;
+  }
+  size_t edit_revision(RegionKey key) const
+  {
+    const auto it = edits_.find(key);
+    return it == edits_.end() ? 0 : it->second.size();
+  }
+  std::vector<TerrainEdit> copy_edits(RegionKey key) const
+  {
+    const auto it = edits_.find(key);
+    return it == edits_.end() ? std::vector<TerrainEdit>{} : it->second;
+  }
+  std::shared_ptr<const TerrainRegion::Tree> share_source(RegionKey key) const
+  {
+    const auto it = chunks_.find(key);
+    return it == chunks_.end() ? nullptr : it->second;
+  }
+  // Worker-validated data with an up-to-date edit snapshot. Callers verify
+  // edit_revision and clear_revision before committing on the world thread.
+  // No tree traversal, edit replay, or large deallocation occurs here.
+  void CommitPreparedSource(RegionKey key, uint32_t lod,
+                            std::shared_ptr<TerrainRegion::Tree> data,
+                            bool procedural, RetiredSources& retired)
+  {
+    if (auto it = chunks_.find(key); it != chunks_.end())
+    {
+      retired.trees.push_back(std::move(it->second));
+      chunks_.erase(it);
+    }
+    if (procedural || !data->empty())
+      chunks_.emplace(key, std::move(data));
+    else
+      retired.trees.push_back(std::move(data));
+    if (procedural)
+      generatedLOD_.insert_or_assign(key, lod);
+    else
+      generatedLOD_.erase(key);
+    for (auto& [_, view] : loaded_)
+      retired.views.push_back(std::move(view));
+    loaded_.clear();
+    ++revision_;
+    MarkSourceChanged(key);
+  }
+  uint32_t source_lod(RegionKey key) const
+  {
+    // Edited chunks render at finest detail so small edits remain visible.
+    if (edits_.contains(key)) return 0;
+    const auto it = generatedLOD_.find(key);
+    return it == generatedLOD_.end() ? 0 : it->second;
   }
 
   // A region's depth cap is independent of its spatial scale. These const
@@ -313,6 +424,16 @@ public:
     return keys;
   }
   uint64_t revision() const noexcept { return revision_; }
+  uint64_t source_revision(RegionKey key) const noexcept
+  {
+    const auto it = sourceRevisions_.find(key);
+    return it == sourceRevisions_.end() ? 0 : it->second;
+  }
+  uint64_t source_face_revision(RegionKey key, size_t face) const noexcept
+  {
+    const auto it = sourceFaceRevisions_.find(key);
+    return it == sourceFaceRevisions_.end() ? 0 : it->second[face];
+  }
   const TerrainRegion::Tree* source(RegionKey key) const
   {
     validate(key);
@@ -329,15 +450,54 @@ public:
   }
   void clear() noexcept
   {
+    ++clearRevision_;
     ++revision_;
     loaded_.clear();
     chunks_.clear();
+    edits_.clear();
+    generatedLOD_.clear();
+    sourceRevisions_.clear();
+    sourceFaceRevisions_.clear();
   }
 
 private:
+  std::unordered_map<RegionKey, std::vector<TerrainEdit>, RegionKeyHash> edits_;
+  std::unordered_map<RegionKey, uint32_t, RegionKeyHash> generatedLOD_;
+  void ReplayEdits(RegionKey key, TerrainRegion::Tree& data) const
+  {
+    const auto it = edits_.find(key);
+    if (it == edits_.end()) return;
+    for (const auto& edit : it->second)
+      if (edit.value.density == 0) data.erase({edit.origin, edit.depth});
+      else data.paint({edit.origin, edit.depth}, edit.value);
+  }
+  std::unordered_map<RegionKey, uint64_t, RegionKeyHash> sourceRevisions_;
+  std::unordered_map<RegionKey, std::array<uint64_t,6>, RegionKeyHash> sourceFaceRevisions_;
+  void MarkSourceChanged(RegionKey key, const TerrainEdit* edit = nullptr)
+  {
+    if (!chunks_.contains(key))
+    {
+      sourceRevisions_.erase(key);
+      sourceFaceRevisions_.erase(key);
+      return;
+    }
+    sourceRevisions_.insert_or_assign(key, revision_);
+    auto& faces = sourceFaceRevisions_[key];
+    if (!edit) faces.fill(revision_);
+    else
+    {
+      const auto width = 1u << (chunk_depth-edit->depth);
+      for (size_t axis=0; axis<3; ++axis)
+      {
+        if (!edit->origin[axis]) faces[axis*2] = revision_;
+        if (edit->origin[axis]+width == chunk_voxels) faces[axis*2+1] = revision_;
+      }
+    }
+  }
+  uint64_t clearRevision_ = 0;
   uint64_t revision_ = 0;
   using SourceMap =
-      std::unordered_map<RegionKey, std::unique_ptr<TerrainRegion::Tree>,
+      std::unordered_map<RegionKey, std::shared_ptr<TerrainRegion::Tree>,
                          RegionKeyHash>;
   SourceMap chunks_;
   std::unordered_map<RegionKey, std::unique_ptr<TerrainRegion>, RegionKeyHash>
