@@ -29,7 +29,14 @@ TEST_P(ImGuiViewportPixels, SecondaryViewportContainsRenderedPixels)
     backend = std::make_unique<OpenGLBackend>();
   std::string diagnostic;
   ASSERT_TRUE(backend->Initialize(diagnostic)) << diagnostic;
-  Renderer renderer(backend->CreateDevice({}), &windows);
+  Renderer renderer(
+      backend->CreateDevice(
+          {.queues = {{.capabilities =
+                           Lighthouse::RenderQueueCapability::Graphics |
+                           Lighthouse::RenderQueueCapability::Compute |
+                           Lighthouse::RenderQueueCapability::Transfer,
+                       .minCount = 1}}}),
+      &windows);
   ImGuiContext* context{};
   ImGuiViewport* viewport{};
   ImVec2 windowSize{320, 200};

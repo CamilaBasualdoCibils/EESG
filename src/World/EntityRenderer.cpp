@@ -1,4 +1,5 @@
 #include "EntityRenderer.hpp"
+#include "HostBuffer.hpp"
 #include "World/Entity/MeshRender.hpp"
 #include "World/Entity/Transform.hpp"
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
@@ -43,7 +44,9 @@ void EntityRenderer::Prepare(TechniqueBuildContext& context,
     draw.uniform = device.CreateBuffer(
         {.size = sizeof(frame),
          .usage = BufferUsage::Uniform,
-         .initialData = std::as_bytes(std::span(&frame, 1))});
+         .initialData = std::as_bytes(std::span(&frame, 1)),
+         .memory = {.requiredAccess =
+                        MemoryAccess::CPUWrite | MemoryAccess::GPURead}});
     draw.set =
         device.CreateDescriptorSet({.layout = instance->material->frameLayout});
     const std::array writes{
@@ -104,8 +107,9 @@ void EntityRenderer::Draw(const GeometryGroup& group,
     const MaterialFrameData frame{
         .viewProjection = viewProjection,
         .model = registry.get<Transform>(draw.entity).GetMatrix()};
-    m_renderer->GetRenderDevice()->UpdateBuffer(
-        resources.get<ImportedRenderGraphBuffer>(draw.uniform).handle, 0,
+    WriteHostBuffer(
+        *m_renderer->GetRenderDevice(),
+        resources.get<ImportedRenderGraphBuffer>(draw.uniform).handle,
         std::as_bytes(std::span(&frame, 1)));
     commands.BindPipeline(draw.instance->material->gBufferPipeline);
     commands.BindDescriptorSet(0, draw.set);

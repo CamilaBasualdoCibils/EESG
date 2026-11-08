@@ -547,8 +547,13 @@ int main()
     if (!backend->Initialize(diagnostic))
       throw std::runtime_error(diagnostic);
     {
-      auto device =
-          backend->CreateDevice({.applicationName = "glTF GPU image tests"});
+      auto device = backend->CreateDevice(
+          {.applicationName = "glTF GPU image tests",
+           .queues = {
+               {.capabilities = Lighthouse::RenderQueueCapability::Graphics |
+                                Lighthouse::RenderQueueCapability::Compute |
+                                Lighthouse::RenderQueueCapability::Transfer,
+                .minCount = 1}}});
       std::cout << device->GetCapabilities().deviceName << '\n';
       TestUploads(*device, fixtures);
       const auto helmetPath =

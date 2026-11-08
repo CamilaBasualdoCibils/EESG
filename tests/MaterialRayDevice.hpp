@@ -95,10 +95,10 @@ public:
   FORWARD_DESTROY(DestroySampler, SamplerHandle)
 #undef FORWARD_DESTROY
   Lighthouse::SwapchainHandle
-  CreateSwapchain(Lighthouse::Window& window,
+  CreateSwapchain(Lighthouse::SurfaceHandle surface,
                   const Lighthouse::SwapchainConfig& config) override
   {
-    return device.CreateSwapchain(window, config);
+    return device.CreateSwapchain(surface, config);
   }
   Lighthouse::AcquiredSwapchainImage
   AcquireSwapchainImage(Lighthouse::SwapchainHandle h) override
@@ -121,17 +121,83 @@ public:
     device.UpdateDescriptorSet(h, writes);
   }
   std::unique_ptr<Lighthouse::IRenderCommandList>
-  CreateCommandList(Lighthouse::QueueType type) override
+  CreateCommandList(std::uint32_t queueIndex) override
   {
-    return device.CreateCommandList(type);
+    return device.CreateCommandList(queueIndex);
   }
-  void Submit(const Lighthouse::IRenderCommandList& commands) override
+  Lighthouse::SurfaceHandle CreateSurface(Lighthouse::Window& w) override
   {
-    device.Submit(commands);
+    return device.CreateSurface(w);
   }
-  void Present(Lighthouse::SwapchainHandle h) override
+  void DestroySurface(Lighthouse::SurfaceHandle h) override
   {
-    device.Present(h);
+    device.DestroySurface(h);
+  }
+  Lighthouse::IRenderQueue* GetQueue(std::uint32_t index) override
+  {
+    return device.GetQueue(index);
+  }
+  Lighthouse::FenceHandle CreateFence(bool signaled) override
+  {
+    return device.CreateFence(signaled);
+  }
+  void DestroyFence(Lighthouse::FenceHandle h) override
+  {
+    return device.DestroyFence(h);
+  }
+  void ResetFence(Lighthouse::FenceHandle h) override
+  {
+    return device.ResetFence(h);
+  }
+  bool GetFenceStatus(Lighthouse::FenceHandle h) override
+  {
+    return device.GetFenceStatus(h);
+  }
+  bool WaitForFence(Lighthouse::FenceHandle h, std::uint64_t timeout) override
+  {
+    return device.WaitForFence(h, timeout);
+  }
+  Lighthouse::SemaphoreHandle CreateSemaphore(Lighthouse::SemaphoreType type,
+                                              std::uint64_t value) override
+  {
+    return device.CreateSemaphore(type, value);
+  }
+  void DestroySemaphore(Lighthouse::SemaphoreHandle h) override
+  {
+    return device.DestroySemaphore(h);
+  }
+  std::uint64_t GetSemaphoreCounterValue(Lighthouse::SemaphoreHandle h) override
+  {
+    return device.GetSemaphoreCounterValue(h);
+  }
+  void SignalSemaphore(Lighthouse::SemaphoreHandle h,
+                       std::uint64_t value) override
+  {
+    return device.SignalSemaphore(h, value);
+  }
+  bool WaitSemaphore(Lighthouse::SemaphoreHandle h, std::uint64_t value,
+                     std::uint64_t timeout) override
+  {
+    return device.WaitSemaphore(h, value, timeout);
+  }
+  std::span<std::byte> MapMemory(Lighthouse::BufferHandle h) override
+  {
+    return device.MapMemory(h);
+  }
+  void UnmapMemory(Lighthouse::BufferHandle h) override
+  {
+    return device.UnmapMemory(h);
+  }
+  void FlushMappedMemoryRange(Lighthouse::BufferHandle h, std::uint64_t offset,
+                              std::uint64_t size) override
+  {
+    return device.FlushMappedMemoryRange(h, offset, size);
+  }
+  void InvalidateMappedMemoryRange(Lighthouse::BufferHandle h,
+                                   std::uint64_t offset,
+                                   std::uint64_t size) override
+  {
+    return device.InvalidateMappedMemoryRange(h, offset, size);
   }
   void WaitIdle() override
   {

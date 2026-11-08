@@ -57,7 +57,9 @@ private:
   struct Readback
   {
     Lighthouse::BufferHandle buffer{};
-    uint64_t marker{}, revision{};
+    Lighthouse::SemaphoreHandle semaphore;
+    uint64_t value{}, revision{};
+    bool pending{};
   };
   Lighthouse::IRenderDevice* device_{};
   Lighthouse::BufferHandle terrain_{};

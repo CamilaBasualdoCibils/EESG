@@ -340,7 +340,7 @@ void TerrainSystem::BuildGraph(RenderGraph& graph, IRenderDevice& device,
         if (inspectorEnabled_)
         {
           size_t index = 0;
-          while (index < readbacks_.size() && readbacks_[index].marker)
+          while (index < readbacks_.size() && readbacks_[index].pending)
             ++index;
           if (index == readbacks_.size())
             ++skippedReadbacks_;
@@ -349,9 +349,15 @@ void TerrainSystem::BuildGraph(RenderGraph& graph, IRenderDevice& device,
             c.CopyBuffer(Buffer(r, d.tree, true),
                          Buffer(r, d.slots[index], true), 0, 0,
                          TerrainBufferBytes);
+            auto& slot = readbacks_[index];
+            if (!slot.semaphore)
+              slot.semaphore =
+                  device_->CreateSemaphore(SemaphoreType::Timeline);
+            ++slot.value;
+            e.signals.push_back({slot.semaphore, slot.value});
             e.afterSubmit = [this, index]
             {
-              readbacks_[index].marker = device_->InsertCompletionMarker();
+              readbacks_[index].pending = true;
               readbacks_[index].revision = revision_;
             };
           }
@@ -365,16 +371,18 @@ void TerrainSystem::PollReadbacks()
     return;
   for (auto& slot : readbacks_)
   {
-    if (!slot.marker || !device_->PollCompletionMarker(slot.marker))
+    if (!slot.pending || !device_->WaitSemaphore(slot.semaphore, slot.value, 0))
       continue;
     if (!snapshot_ || slot.revision > snapshot_->Revision())
     {
-      auto memory = std::make_shared<TerrainSnapshotMemory>(
-          device_->ReadCompletedBuffer(slot.buffer), slot.revision);
+      device_->InvalidateMappedMemoryRange(slot.buffer, 0, TerrainBufferBytes);
+      auto mapped = device_->MapMemory(slot.buffer);
+      auto memory =
+          std::make_shared<TerrainSnapshotMemory>(mapped, slot.revision);
+      device_->UnmapMemory(slot.buffer);
       snapshot_ = std::make_shared<TerrainOctree>(std::move(memory));
     }
-    device_->ReleaseCompletionMarker(slot.marker);
-    slot.marker = 0;
+    slot.pending = false;
   }
 }
 void TerrainSystem::Release()
@@ -384,8 +392,8 @@ void TerrainSystem::Release()
   device_->WaitIdle();
   for (auto& slot : readbacks_)
   {
-    if (slot.marker)
-      device_->ReleaseCompletionMarker(slot.marker);
+    if (slot.semaphore)
+      device_->DestroySemaphore(slot.semaphore);
     if (slot.buffer)
       device_->DestroyBuffer(slot.buffer);
     slot = {};

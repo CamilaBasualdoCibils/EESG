@@ -1,4 +1,5 @@
 #include "WorldRenderer.hpp"
+#include "HostBuffer.hpp"
 
 #include "World/Entity/Light.hpp"
 #include "World/Entity/Transform.hpp"
@@ -166,16 +167,21 @@ void WorldRenderer::BuildCamera(Lighthouse::TechniqueBuildContext& context,
     const auto lights = GatherLights();
     lightCapacity = std::max(size_t{1}, lights.size());
     const auto bytes = LightingBytes(lights, lightCapacity, projection());
-    lightBuffer = device.CreateBuffer({.size = bytes.size(),
-                                       .usage = BufferUsage::Storage,
-                                       .initialData = bytes});
+    lightBuffer = device.CreateBuffer(
+        {.size = bytes.size(),
+         .usage = BufferUsage::Storage,
+         .initialData = bytes,
+         .memory = {.requiredAccess =
+                        MemoryAccess::CPUWrite | MemoryAccess::GPURead}});
     m_lightBuffers.push_back(lightBuffer);
     sceneLights = import("Scene lights", lightBuffer);
     const auto draws = VolumeCommands(lights);
-    lightIndirect =
-        device.CreateBuffer({.size = sizeof(draws),
-                             .usage = BufferUsage::Indirect,
-                             .initialData = std::as_bytes(std::span(draws))});
+    lightIndirect = device.CreateBuffer(
+        {.size = sizeof(draws),
+         .usage = BufferUsage::Indirect,
+         .initialData = std::as_bytes(std::span(draws)),
+         .memory = {.requiredAccess =
+                        MemoryAccess::CPUWrite | MemoryAccess::GPURead}});
     m_lightBuffers.push_back(lightIndirect);
     const auto* volume = m_renderer->GetRenderMesh(m_volumes[0]);
     lightVertices =
@@ -385,10 +391,11 @@ void WorldRenderer::BuildCamera(Lighthouse::TechniqueBuildContext& context,
                 LightingBytes(lights, lightCapacity, projection());
             const auto buffer =
                 resources.get<ImportedRenderGraphBuffer>(data.lights).handle;
-            device.UpdateBuffer(buffer, 0, bytes);
+            WriteHostBuffer(device, buffer, bytes);
             const auto draws = VolumeCommands(lights);
-            device.UpdateBuffer(
-                resources.get<ImportedRenderGraphBuffer>(data.draws).handle, 0,
+            WriteHostBuffer(
+                device,
+                resources.get<ImportedRenderGraphBuffer>(data.draws).handle,
                 std::as_bytes(std::span(draws)));
             const std::array lightWrites{
                 DescriptorWrite{.binding = 0,
@@ -451,7 +458,8 @@ void WorldRenderer::BuildCamera(Lighthouse::TechniqueBuildContext& context,
              .usage = {ImageUsage::ColorAttachment, ImageUsage::TransferSource,
                        ImageUsage::Sampled}});
         data.color = builder.Write(data.color);
-        // Camera outputs remain available even when not selected for presentation.
+        // Camera outputs remain available even when not selected for
+        // presentation.
         builder.SetSideEffect();
       },
       [this, size, outputSet](const OutputData& data,

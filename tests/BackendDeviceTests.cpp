@@ -1,3 +1,4 @@
+#include "../extern/Lighthouse-Engine/Tests/QueueTestHelpers.hpp"
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanCommandList.hpp>
@@ -25,8 +26,14 @@ protected:
       backend = std::make_unique<OpenGLBackend>();
     std::string diagnostic;
     ASSERT_TRUE(backend->Initialize(diagnostic)) << diagnostic;
-    ASSERT_NO_THROW(device = backend->CreateDevice(
-                        {.applicationName = "Headless backend regression"}));
+    ASSERT_NO_THROW(
+        device = backend->CreateDevice(
+            {.applicationName = "Headless backend regression",
+             .queues = {
+                 {.capabilities = Lighthouse::RenderQueueCapability::Graphics |
+                                  Lighthouse::RenderQueueCapability::Compute |
+                                  Lighthouse::RenderQueueCapability::Transfer,
+                  .minCount = 1}}}));
     ASSERT_NE(device, nullptr);
     const auto caps = device->GetCapabilities();
     EXPECT_TRUE(caps.headless);
@@ -120,7 +127,7 @@ void main(){color=vec4(0.125,0.25,0.375,0);}
        .usage = {ImageUsage::ColorAttachment, ImageUsage::TransferSource}});
   const auto view =
       device->CreateImageView({.image = target, .format = ImageFormat::RGBA8});
-  const auto commands = device->CreateCommandList(QueueType::Graphics);
+  const auto commands = device->CreateCommandList(0);
   for (bool overwrite : {false, true})
   {
     commands->Begin();
@@ -141,7 +148,7 @@ void main(){color=vec4(0.125,0.25,0.375,0);}
     }
     commands->EndRendering();
     commands->End();
-    device->Submit(*commands);
+    SubmitAndWait(*device, *commands);
     const auto pixels = device->ReadImage(target);
     const auto offset = (8 * 16 + 8) * 4;
     EXPECT_NEAR(std::to_integer<unsigned>(pixels[offset]),
@@ -272,7 +279,7 @@ void main(){first=vec4(0.2,0.4,0.6,0.25);second=first;}
             .sourceColorFactor = BlendFactor::Zero,
             .destinationColorFactor = BlendFactor::One},
            {0.7, 0.3, 0.1, 0.25}}};
-  const auto commands = device->CreateCommandList(QueueType::Graphics);
+  const auto commands = device->CreateCommandList(0);
   for (const auto& test : cases)
   {
     SCOPED_TRACE(test.name);
@@ -293,7 +300,7 @@ void main(){first=vec4(0.2,0.4,0.6,0.25);second=first;}
     commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
     commands->EndRendering();
     commands->End();
-    device->Submit(*commands);
+    SubmitAndWait(*device, *commands);
     for (auto target : {a, b})
     {
       const auto pixels = device->ReadImage(target);
@@ -339,7 +346,7 @@ void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
        .colorFormats = {ImageFormat::RGBA8, ImageFormat::RGBA8},
        .depthFormat = ImageFormat::Depth24Stencil8,
        .layout = layout});
-  const auto commands = device->CreateCommandList(QueueType::Graphics);
+  const auto commands = device->CreateCommandList(0);
   commands->Begin();
   commands->BeginRendering({.clearColor = true,
                             .clearColorValue = {0, 0, 1},
@@ -348,7 +355,7 @@ void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
                             .colorAttachments = {av, bv}});
   commands->EndRendering();
   commands->End();
-  device->Submit(*commands);
+  SubmitAndWait(*device, *commands);
   for (auto image : {a, b})
   {
     const auto pixels = device->ReadImage(image);
@@ -367,7 +374,7 @@ void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
   commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
   commands->EndRendering();
   commands->End();
-  device->Submit(*commands);
+  SubmitAndWait(*device, *commands);
   const auto first = device->ReadImage(a), second = device->ReadImage(b);
   const auto center = (32 * 64 + 32) * 4;
   EXPECT_GT(std::to_integer<unsigned>(first[center]), 250u);
@@ -391,7 +398,7 @@ void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
     commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
     commands->EndRendering();
     commands->End();
-    device->Submit(*commands);
+    SubmitAndWait(*device, *commands);
     const auto red = device->ReadImage(a), green = device->ReadImage(b);
     EXPECT_EQ(std::to_integer<unsigned>(red[center]),
               reference == 3 ? 255u : 0u);
@@ -455,7 +462,9 @@ layout(location=0) out vec4 color;void main(){color=tint.value;}
   auto greenBuffer =
       gpu->CreateBuffer({.size = 16,
                          .usage = BufferUsage::Uniform,
-                         .initialData = std::as_bytes(std::span(red))});
+                         .initialData = std::as_bytes(std::span(red)),
+                         .memory = {.requiredAccess = MemoryAccess::CPUWrite |
+                                                      MemoryAccess::GPURead}});
   const auto set = gpu->CreateDescriptorSet({setLayout});
   const std::array initial{
       DescriptorWrite{.resource = DescriptorBufferInfo{redBuffer}}};
@@ -473,7 +482,7 @@ layout(location=0) out vec4 color;void main(){color=tint.value;}
                                  .usage = {ImageUsage::DepthAttachment}});
   auto depthView =
       gpu->CreateImageView({.image = depth, .format = ImageFormat::Depth32});
-  auto commands = gpu->CreateCommandList(QueueType::Graphics);
+  auto commands = gpu->CreateCommandList(0);
   if (GetParam())
     ASSERT_TRUE(static_cast<bool>(
         dynamic_cast<VulkanCommandList*>(commands.get())->Native()));
@@ -491,22 +500,30 @@ layout(location=0) out vec4 color;void main(){color=tint.value;}
   commands->BindIndexBuffer(first->indexBuffer->buffer);
   std::vector<DrawIndexedIndirectCommand> draws;
   for (auto* mesh : {first, second})
-    draws.push_back({mesh->indexCount, 1,
-        static_cast<unsigned>(mesh->indexBuffer->offset / 4),
-        static_cast<int>(mesh->vertexBuffers[0].offset / sizeof(Mesh3DVertex)), 0});
-  const auto indirect = gpu->CreateBuffer({
-      .size = draws.size() * sizeof(draws[0]), .usage = BufferUsage::Indirect,
-      .initialData = std::as_bytes(std::span(draws))});
-  commands->MultiDrawIndexedIndirect(indirect, static_cast<unsigned>(draws.size()));
+    draws.push_back(
+        {mesh->indexCount, 1,
+         static_cast<unsigned>(mesh->indexBuffer->offset / 4),
+         static_cast<int>(mesh->vertexBuffers[0].offset / sizeof(Mesh3DVertex)),
+         0});
+  const auto indirect =
+      gpu->CreateBuffer({.size = draws.size() * sizeof(draws[0]),
+                         .usage = BufferUsage::Indirect,
+                         .initialData = std::as_bytes(std::span(draws))});
+  commands->MultiDrawIndexedIndirect(indirect,
+                                     static_cast<unsigned>(draws.size()));
   commands->EndRendering();
   commands->End();
   // The interface promises descriptor/host updates before Submit are visible,
   // even after a native command buffer was recorded.
-  gpu->UpdateBuffer(greenBuffer, 0, std::as_bytes(std::span(green)));
+  auto mapped = gpu->MapMemory(greenBuffer);
+  const auto bytes = std::as_bytes(std::span(green));
+  std::copy(bytes.begin(), bytes.end(), mapped.begin());
+  gpu->FlushMappedMemoryRange(greenBuffer, 0, bytes.size());
+  gpu->UnmapMemory(greenBuffer);
   const std::array updated{
       DescriptorWrite{.resource = DescriptorBufferInfo{greenBuffer}}};
   gpu->UpdateDescriptorSet(set, updated);
-  gpu->Submit(*commands);
+  SubmitAndWait(*gpu, *commands);
   auto pixels = gpu->ReadImage(image);
   gpu->DestroyBuffer(indirect);
   for (auto x : {16u, 48u})
@@ -548,16 +565,16 @@ layout(location=0) out vec4 color;void main(){color=data.value;}
   const std::array writes{
       DescriptorWrite{.resource = DescriptorBufferInfo{buffer}}};
   device->UpdateDescriptorSet(set, writes);
-  auto commands = device->CreateCommandList(QueueType::Compute);
+  auto commands = device->CreateCommandList(0);
   commands->Begin();
   commands->BindPipeline(computePipeline);
   commands->BindDescriptorSet(0, set);
   commands->Dispatch(1, 1, 1);
   commands->End();
-  device->Submit(*commands);
+  SubmitAndWait(*device, *commands);
   auto image = Target();
   auto view = View(image);
-  auto draw = device->CreateCommandList(QueueType::Graphics);
+  auto draw = device->CreateCommandList(0);
   draw->Begin();
   draw->BeginRendering(
       {.colorAttachment = view, .clearColor = true, .width = 64, .height = 64});
@@ -566,7 +583,7 @@ layout(location=0) out vec4 color;void main(){color=data.value;}
   draw->Draw(PrimitiveTopology::TriangleList, 3, 0);
   draw->EndRendering();
   draw->End();
-  device->Submit(*draw);
+  SubmitAndWait(*device, *draw);
   const auto pixels = device->ReadImage(image);
   EXPECT_NEAR(std::to_integer<int>(pixels[(32 * 64 + 32) * 4]), 51, 2);
   EXPECT_NEAR(std::to_integer<int>(pixels[(32 * 64 + 32) * 4 + 1]), 204, 2);
@@ -606,7 +623,7 @@ void main(){color=texture(sourceImage,vec2(0.5));}
   auto image = Target();
   auto view = View(image);
   auto output = Target(128);
-  auto commands = device->CreateCommandList(QueueType::Graphics);
+  auto commands = device->CreateCommandList(0);
   commands->Begin();
   commands->BeginRendering(
       {.colorAttachment = view, .clearColor = true, .width = 64, .height = 64});
@@ -620,7 +637,7 @@ void main(){color=texture(sourceImage,vec2(0.5));}
                           .dstOffsets = {{{0, 0, 0}, {128, 128, 1}}}};
   commands->BlitImage(image, output, region, ImageFilter::Linear);
   commands->End();
-  device->Submit(*commands);
+  SubmitAndWait(*device, *commands);
   const auto pixels = device->ReadImage(output);
   EXPECT_GT(std::to_integer<unsigned>(pixels[(64 * 128 + 64) * 4]), 250u);
   EXPECT_LT(std::to_integer<unsigned>(pixels[(64 * 128 + 64) * 4 + 1]), 5u);
@@ -639,7 +656,7 @@ TEST_P(HeadlessDeviceTests, HDRPresentationStorageBlitsPreserveColorChannels)
          .usage = {ImageUsage::ColorAttachment, ImageUsage::TransferSource}});
     const auto sourceView =
         device->CreateImageView({.image = source, .format = format});
-    auto commands = device->CreateCommandList(QueueType::Graphics);
+    auto commands = device->CreateCommandList(0);
     commands->Begin();
     commands->BeginRendering({.colorAttachment = sourceView,
                               .clearColor = true,
@@ -653,7 +670,7 @@ TEST_P(HeadlessDeviceTests, HDRPresentationStorageBlitsPreserveColorChannels)
                             .dstOffsets = {{{0, 0, 0}, {64, 64, 1}}}};
     commands->BlitImage(source, destination, region, ImageFilter::Nearest);
     commands->End();
-    device->Submit(*commands);
+    SubmitAndWait(*device, *commands);
     const auto pixels = device->ReadImage(destination);
     ASSERT_GE(pixels.size(), 4u);
     EXPECT_NEAR(std::to_integer<unsigned>(pixels[0]), 64, 2);
@@ -699,7 +716,8 @@ public:
   {
     return {};
   }
-  std::unique_ptr<IRenderDevice> CreateDevice(const DeviceConfig&) override
+  std::unique_ptr<IRenderDevice>
+  CreateDevice(const RenderDeviceCreateInfo&) override
   {
     throw std::runtime_error("intentional device creation failure");
   }
@@ -805,7 +823,7 @@ TEST_P(WindowDeviceTests, OrderedSwapchainFormatPreferences)
   {
     const auto image = gpu->AcquireSwapchainImage(view->swapchain);
     const auto size = view->GetWindow()->GetFramebufferSize();
-    auto commands = gpu->CreateCommandList(QueueType::Graphics);
+    auto commands = gpu->CreateCommandList(0);
     commands->Begin();
     commands->BeginRendering({.colorAttachment = image.view,
                               .clearColor = true,
@@ -814,8 +832,8 @@ TEST_P(WindowDeviceTests, OrderedSwapchainFormatPreferences)
                               .height = size.height});
     commands->EndRendering();
     commands->End();
-    gpu->Submit(*commands);
-    gpu->Present(view->swapchain);
+    SubmitAndWait(*gpu, *commands);
+    gpu->GetQueue(0)->Present(view->swapchain);
     glfwSetWindowSize(
         static_cast<GLFWwindow*>(view->GetWindow()->NativeHandle()), 80, 72);
     windows.PollEvents();
@@ -833,7 +851,7 @@ TEST_P(WindowDeviceTests, OrderedSwapchainFormatPreferences)
 
 TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
 {
-  const auto survivingImage=Target();
+  const auto survivingImage = Target();
   WindowManager windows;
   const auto a =
       windows.CreateWindow({.title = "Backend window test A",
@@ -847,17 +865,21 @@ TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
                             .height = 64,
                             .eglSurface = device->RequiresEGLWindow(),
                             .visible = false});
-  const auto first =
-      device->CreateSwapchain(*windows.GetWindow(a), {.vsync = false});
-  const auto second =
-      device->CreateSwapchain(*windows.GetWindow(b), {.vsync = false});
+  const auto firstSurface = device->CreateSurface(*windows.GetWindow(a));
+  auto* presentQueue = device->GetQueue(0);
+  ASSERT_NE(presentQueue, nullptr);
+  const auto first = device->CreateSwapchain(firstSurface, {.vsync = false});
+  const auto secondSurface = device->CreateSurface(*windows.GetWindow(b));
+  const auto second = device->CreateSwapchain(secondSurface, {.vsync = false});
+  EXPECT_THROW(device->DestroySurface(firstSurface), std::exception);
   for (unsigned frame = 0; frame < 12; ++frame)
   {
     windows.PollEvents();
     auto left = device->AcquireSwapchainImage(first);
     auto right = device->AcquireSwapchainImage(second);
-    auto commands = device->CreateCommandList(QueueType::Graphics);
+    auto commands = device->CreateCommandList(0);
     commands->Begin();
+    commands->PushDebugGroup("Render both presentation surfaces");
     const auto leftSize = windows.GetWindow(a)->GetFramebufferSize();
     const auto rightSize = windows.GetWindow(b)->GetFramebufferSize();
     commands->BeginRendering({.colorAttachment = left.view,
@@ -872,8 +894,9 @@ TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
                               .width = rightSize.width,
                               .height = rightSize.height});
     commands->EndRendering();
+    commands->PopDebugGroup();
     commands->End();
-    device->Submit(*commands);
+    SubmitAndWait(*device, *commands);
     const auto leftPixels = device->ReadImage(left.image);
     const auto rightPixels = device->ReadImage(right.image);
     ASSERT_GE(leftPixels.size(), 4u);
@@ -882,8 +905,8 @@ TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
     EXPECT_LT(std::to_integer<unsigned>(leftPixels[1]), 5u);
     EXPECT_GT(std::to_integer<unsigned>(rightPixels[1]), 250u);
     EXPECT_LT(std::to_integer<unsigned>(rightPixels[0]), 5u);
-    device->Present(first);
-    device->Present(second);
+    device->GetQueue(0)->Present(first);
+    device->GetQueue(0)->Present(second);
     if (frame == 4)
     {
       glfwSetWindowSize(
@@ -895,12 +918,14 @@ TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
   EXPECT_TRUE(device->DestroySwapchain(first));
   EXPECT_FALSE(device->IsValid(first));
   EXPECT_TRUE(device->DestroySwapchain(second));
+  device->DestroySurface(firstSurface);
+  device->DestroySurface(secondSurface);
   windows.DestroyWindow(a);
   windows.DestroyWindow(b);
   // All presentation resources are gone; the device must still work.
   const auto image = survivingImage;
   const auto view = View(image);
-  auto clear = device->CreateCommandList(QueueType::Graphics);
+  auto clear = device->CreateCommandList(0);
   clear->Begin();
   clear->BeginRendering({.colorAttachment = view,
                          .clearColor = true,
@@ -909,7 +934,7 @@ TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
                          .height = 64});
   clear->EndRendering();
   clear->End();
-  device->Submit(*clear);
+  SubmitAndWait(*device, *clear);
   EXPECT_GT(std::to_integer<unsigned>(device->ReadImage(image)[2]), 250u);
 }
 INSTANTIATE_TEST_SUITE_P(Backends, WindowDeviceTests,
@@ -951,7 +976,7 @@ TEST_P(HeadlessDeviceTests, ShaderObjectMultiviewIsReportedUnavailable)
                                              .format = ImageFormat::RGBA8,
                                              .type = ImageType::Image2DArray,
                                              .arrayLayerCount = 2});
-  auto command = device->CreateCommandList(QueueType::Graphics);
+  auto command = device->CreateCommandList(0);
   command->Begin();
   EXPECT_THROW(
       command->BeginRendering(
@@ -1007,7 +1032,7 @@ void main(){color=texture(images[nonuniformEXT(int(gl_FragCoord.x)&1)],vec2(0.5)
   device->UpdateDescriptorSet(set, writes);
   const auto target = Target();
   const auto view = View(target);
-  auto command = device->CreateCommandList(QueueType::Graphics);
+  auto command = device->CreateCommandList(0);
   command->Begin();
   command->BeginRendering(
       {.colorAttachment = view, .clearColor = true, .width = 64, .height = 64});
@@ -1016,7 +1041,7 @@ void main(){color=texture(images[nonuniformEXT(int(gl_FragCoord.x)&1)],vec2(0.5)
   command->Draw(PrimitiveTopology::TriangleList, 3, 0);
   command->EndRendering();
   command->End();
-  device->Submit(*command);
+  SubmitAndWait(*device, *command);
   const auto pixels = device->ReadImage(target);
   EXPECT_GT(std::to_integer<unsigned>(pixels[(32 * 64 + 32) * 4]), 250u);
   EXPECT_GT(std::to_integer<unsigned>(pixels[(32 * 64 + 33) * 4 + 1]), 250u);
@@ -1055,7 +1080,7 @@ void main(){color=texture(image,vec2(0.5));}
   View(b);
   const auto target = Target();
   const auto view = View(target);
-  auto command = device->CreateCommandList(QueueType::Graphics);
+  auto command = device->CreateCommandList(0);
   command->Begin();
   command->BeginRendering(
       {.colorAttachment = view, .clearColor = true, .width = 32, .height = 64});
@@ -1070,7 +1095,7 @@ void main(){color=texture(image,vec2(0.5));}
   command->Draw(PrimitiveTopology::TriangleList, 3, 0);
   command->EndRendering();
   command->End();
-  device->Submit(*command);
+  SubmitAndWait(*device, *command);
   auto pixels = device->ReadImage(target);
   EXPECT_GT(std::to_integer<unsigned>(pixels[(32 * 64 + 16) * 4]), 250u);
   EXPECT_GT(std::to_integer<unsigned>(pixels[(32 * 64 + 48) * 4 + 1]), 250u);
@@ -1084,7 +1109,7 @@ void main(){color=texture(image,vec2(0.5));}
                            .height = 64});
   command->EndRendering();
   command->End();
-  device->Submit(*command);
+  SubmitAndWait(*device, *command);
   pixels = device->ReadImage(target);
   EXPECT_GT(std::to_integer<unsigned>(pixels[(32 * 64 + 16) * 4 + 2]), 250u);
   EXPECT_LT(std::to_integer<unsigned>(pixels[(32 * 64 + 16) * 4]), 5u);
@@ -1159,7 +1184,7 @@ layout(location=0) out vec4 color;void main(){color=tint.color;}
                  {.image = depthB, .format = ImageFormat::Depth32});
   const auto colorA = Target(), colorB = Target();
   const auto viewA = View(colorA), viewB = View(colorB);
-  auto command = device->CreateCommandList(QueueType::Graphics);
+  auto command = device->CreateCommandList(0);
   command->Begin();
   command->BeginRendering({.colorAttachment = viewA,
                            .depthAttachment = depthViewA,
@@ -1191,7 +1216,7 @@ layout(location=0) out vec4 color;void main(){color=tint.color;}
   command->Draw(PrimitiveTopology::TriangleList, 3, 0);
   command->EndRendering();
   command->End();
-  device->Submit(*command);
+  SubmitAndWait(*device, *command);
   const auto a = device->ReadImage(colorA), b = device->ReadImage(colorB);
   EXPECT_GT(std::to_integer<unsigned>(a[(32 * 64 + 32) * 4 + 1]), 250u);
   EXPECT_LT(std::to_integer<unsigned>(a[(32 * 64 + 32) * 4]), 5u);
@@ -1233,7 +1258,7 @@ layout(location=0) out vec4 color;void main(){color=vec4(1);}
                             .initialData = std::as_bytes(std::span(indices))});
   const auto image = Target();
   const auto view = View(image);
-  auto command = device->CreateCommandList(QueueType::Graphics);
+  auto command = device->CreateCommandList(0);
   command->Begin();
   command->BeginRendering(
       {.colorAttachment = view, .clearColor = true, .width = 64, .height = 64});
@@ -1243,7 +1268,7 @@ layout(location=0) out vec4 color;void main(){color=vec4(1);}
   command->DrawIndexed(2);
   command->EndRendering();
   command->End();
-  device->Submit(*command);
+  SubmitAndWait(*device, *command);
   const auto pixels = device->ReadImage(image);
   unsigned lit = 0;
   for (unsigned y = 30; y <= 33; ++y)
@@ -1251,5 +1276,264 @@ layout(location=0) out vec4 color;void main(){color=vec4(1);}
       if (std::to_integer<unsigned>(pixels[(y * 64 + x) * 4]) > 200)
         ++lit;
   EXPECT_GT(lit, 8u);
+}
+} // namespace
+
+namespace
+{
+TEST_P(HeadlessDeviceTests, QueueFenceResetAndEmptySubmission)
+{
+  auto* queue = device->GetQueue(0);
+  ASSERT_NE(queue, nullptr);
+  EXPECT_EQ(queue, device->GetQueue(0));
+  EXPECT_EQ(device->GetQueue(1), nullptr);
+  EXPECT_EQ(device->GetQueue(UINT32_MAX), nullptr);
+  EXPECT_EQ(queue, device->GetQueue(0));
+  const auto fence = device->CreateFence(true);
+  EXPECT_TRUE(device->GetFenceStatus(fence));
+  device->ResetFence(fence);
+  EXPECT_FALSE(device->GetFenceStatus(fence));
+  EXPECT_FALSE(device->WaitForFence(fence, 0));
+  device->GetQueue(0)->Submit(QueueSubmitInfo{}, fence);
+  ASSERT_TRUE(device->WaitForFence(fence));
+  EXPECT_TRUE(device->GetFenceStatus(fence));
+  device->DestroyFence(fence);
+}
+
+TEST_P(HeadlessDeviceTests, MappedCopiesBinaryAndTimelineDependencies)
+{
+  const auto source = device->CreateBuffer(
+      {.size = 64,
+       .usage = BufferUsage::TransferSrc,
+       .memory = {.requiredAccess =
+                      MemoryAccess::CPUWrite | MemoryAccess::GPURead}});
+  const auto intermediate = device->CreateBuffer(
+      {.size = 64,
+       .usage = {BufferUsage::TransferSrc, BufferUsage::TransferDst}});
+  const auto destination = device->CreateBuffer(
+      {.size = 64,
+       .usage = BufferUsage::TransferDst,
+       .memory = {.requiredAccess =
+                      MemoryAccess::CPURead | MemoryAccess::GPUWrite}});
+  std::array<std::byte, 64> expected;
+  for (size_t i = 0; i < expected.size(); ++i)
+    expected[i] = std::byte(i);
+  auto mapped = device->MapMemory(source);
+  std::copy(expected.begin(), expected.end(), mapped.begin());
+  device->FlushMappedMemoryRange(source, 0, 64);
+  device->UnmapMemory(source);
+
+  auto upload = device->CreateCommandList(0);
+  auto readback = device->CreateCommandList(0);
+  upload->Begin();
+  upload->PushDebugGroup("Transfer upload");
+  upload->CopyBuffer(source, intermediate, 4, 8, 32);
+  upload->InsertDebugMarker("Upload recorded");
+  upload->PopDebugGroup();
+  upload->End();
+  readback->Begin();
+  readback->CopyBuffer(intermediate, destination, 8, 16, 32);
+  readback->End();
+  const auto binary = device->CreateSemaphore();
+  const auto timeline = device->CreateSemaphore(SemaphoreType::Timeline, 2);
+  EXPECT_EQ(device->GetSemaphoreCounterValue(timeline), 2);
+  device->SignalSemaphore(timeline, 3);
+  EXPECT_TRUE(device->WaitSemaphore(timeline, 3, 0));
+  EXPECT_FALSE(device->WaitSemaphore(timeline, 4, 0));
+  const auto fence = device->CreateFence();
+  auto& queue = *device->GetQueue(0);
+  const IRenderCommandList* first = upload.get();
+  const IRenderCommandList* second = readback.get();
+  for (unsigned iteration = 0; iteration < 3; ++iteration)
+  {
+    if (iteration)
+      device->ResetFence(fence);
+    const std::array hostReady{SemaphoreSubmitInfo{timeline, 3}};
+    const std::array binarySignal{SemaphoreSubmitInfo{binary}};
+    queue.Submit(QueueSubmitInfo{.commandLists = {&first, 1},
+                                 .waits = hostReady,
+                                 .signals = binarySignal});
+    const std::array binaryWait{
+        SemaphoreSubmitInfo{binary, 0, PipelineStage::Transfer}};
+    const std::array completed{SemaphoreSubmitInfo{timeline, 7 + iteration}};
+    queue.Submit(QueueSubmitInfo{.commandLists = {&second, 1},
+                                 .waits = binaryWait,
+                                 .signals = completed},
+                 fence);
+    ASSERT_TRUE(device->WaitSemaphore(timeline, 7 + iteration));
+    ASSERT_TRUE(device->WaitForFence(fence));
+    EXPECT_GE(device->GetSemaphoreCounterValue(timeline), 7 + iteration);
+    device->InvalidateMappedMemoryRange(destination, 0, 64);
+    auto bytes = device->MapMemory(destination);
+    EXPECT_TRUE(std::equal(expected.begin() + 4, expected.begin() + 36,
+                           bytes.begin() + 16));
+    device->UnmapMemory(destination);
+  }
+  // A single submission may contain several command lists as well.
+  device->ResetFence(fence);
+  const std::array<const IRenderCommandList*, 2> batch{first, second};
+  queue.Submit(QueueSubmitInfo{.commandLists = batch}, fence);
+  ASSERT_TRUE(device->WaitForFence(fence));
+  device->DestroyFence(fence);
+  device->DestroySemaphore(binary);
+  device->DestroySemaphore(timeline);
+  device->DestroyBuffer(source);
+  device->DestroyBuffer(intermediate);
+  device->DestroyBuffer(destination);
+}
+} // namespace
+
+namespace
+{
+TEST_P(HeadlessDeviceTests, QueueRequestsAreResolvedAtDeviceCreation)
+{
+  RenderDeviceCreateInfo info{
+      .queues = {{.capabilities = RenderQueueCapability::Graphics |
+                                  RenderQueueCapability::Compute |
+                                  RenderQueueCapability::Transfer,
+                  .minCount = 1,
+                  .preferredCount = 3}}};
+  auto created = backend->CreateDevice(info);
+  std::uint32_t count = 0;
+  while (auto* queue = created->GetQueue(count))
+  {
+    EXPECT_TRUE(
+        queue->GetCapabilities().Contains(RenderQueueCapability::Graphics));
+    for (std::uint32_t previous = 0; previous < count; ++previous)
+      EXPECT_NE(queue, created->GetQueue(previous));
+    ++count;
+    ASSERT_LE(count, 3u);
+  }
+  EXPECT_GE(count, 1u);
+  auto* first = created->GetQueue(0);
+  EXPECT_EQ(created->GetQueue(UINT32_MAX), nullptr);
+  EXPECT_EQ(created->GetQueue(0), first);
+  EXPECT_EQ(created->GetQueue(count), nullptr);
+  // Minimums take precedence over earlier optional preferences.
+  info.queues = {
+      {.capabilities = RenderQueueCapability::Present, .preferredCount = 0},
+      {.capabilities = static_cast<RenderQueueCapability>(1u << 31),
+       .preferredCount = 3},
+      {.capabilities = RenderQueueCapability::Graphics, .minCount = 1}};
+  auto mandatory = backend->CreateDevice(info);
+  ASSERT_NE(mandatory->GetQueue(0), nullptr);
+  EXPECT_EQ(mandatory->GetQueue(1), nullptr);
+  info.queues = {{.capabilities = RenderQueueCapability::Graphics,
+                  .minCount = UINT32_MAX,
+                  .preferredCount = UINT32_MAX}};
+  EXPECT_THROW(backend->CreateDevice(info), std::exception);
+  info.queues = {{.capabilities = RenderQueueCapability::Graphics,
+                  .minCount = 2,
+                  .preferredCount = 1}};
+  EXPECT_THROW(backend->CreateDevice(info), std::exception);
+}
+TEST_P(WindowDeviceTests, PresentationQueueRequestedBeforeDeviceCreation)
+{
+  WindowManager windows;
+  const auto window =
+      windows.CreateWindow({.title = "Pre-device queue surface",
+                            .width = 64,
+                            .height = 64,
+                            .eglSurface = backend->RequiresEGLWindow(),
+                            .visible = false});
+  const auto surface = backend->CreateSurface(*windows.GetWindow(window));
+  RenderDeviceCreateInfo info{
+      .queues = {{.capabilities = RenderQueueCapability::Graphics |
+                                  RenderQueueCapability::Present,
+                  .minCount = 1,
+                  .preferredCount = 2,
+                  .presentSurface = surface}}};
+  auto created = backend->CreateDevice(info);
+  auto* queue = created->GetQueue(0);
+  ASSERT_NE(queue, nullptr);
+  const auto swapchain = created->CreateSwapchain(surface, {});
+  const auto image = created->AcquireSwapchainImage(swapchain);
+  const std::uint32_t renderIndex = created->GetQueue(1) ? 1 : 0;
+  auto commands = created->CreateCommandList(renderIndex);
+  commands->Begin();
+  commands->BeginRendering({.colorAttachment = image.view,
+                            .clearColor = true,
+                            .clearColorValue = {0, 1, 0},
+                            .width = 64,
+                            .height = 64});
+  commands->EndRendering();
+  commands->End();
+  const auto ready = created->CreateSemaphore();
+  const auto fence = created->CreateFence();
+  const IRenderCommandList* list = commands.get();
+  const std::array signals{SemaphoreSubmitInfo{ready}};
+  created->GetQueue(renderIndex)
+      ->Submit(QueueSubmitInfo{.commandLists = {&list, 1}, .signals = signals},
+               fence);
+  const std::array waits{ready};
+  queue->Present(swapchain, waits);
+  ASSERT_TRUE(created->WaitForFence(fence));
+  created->DestroySwapchain(swapchain);
+  created->DestroyFence(fence);
+  created->DestroySemaphore(ready);
+  commands.reset();
+  created.reset();
+  backend->DestroySurface(surface);
+  info.queues[0].presentSurface = {};
+  EXPECT_THROW(backend->CreateDevice(info), std::exception);
+  windows.DestroyWindow(window);
+}
+} // namespace
+
+namespace
+{
+TEST_P(HeadlessDeviceTests, IndependentCreatedQueuesSynchronizeCopies)
+{
+  auto created = backend->CreateDevice(
+      {.queues = {
+           {.capabilities = RenderQueueCapability::Graphics, .minCount = 1},
+           {.capabilities = RenderQueueCapability::Transfer,
+            .preferredCount = 1}}});
+  if (!created->GetQueue(1))
+    GTEST_SKIP() << "Backend exposes only one matching native queue";
+  const std::array<std::uint32_t, 4> expected{17, 29, 41, 53};
+  const auto upload = created->CreateBuffer(
+      {.size = sizeof(expected),
+       .usage = BufferUsage::TransferSrc,
+       .initialData = std::as_bytes(std::span(expected)),
+       .memory = {.requiredAccess =
+                      MemoryAccess::CPUWrite | MemoryAccess::GPURead}});
+  const auto intermediate = created->CreateBuffer(
+      {.size = sizeof(expected),
+       .usage = {BufferUsage::TransferSrc, BufferUsage::TransferDst}});
+  const auto readback = created->CreateBuffer(
+      {.size = sizeof(expected),
+       .usage = BufferUsage::TransferDst,
+       .memory = {.requiredAccess =
+                      MemoryAccess::CPURead | MemoryAccess::GPUWrite}});
+  auto first = created->CreateCommandList(0);
+  auto second = created->CreateCommandList(1);
+  first->Begin();
+  first->CopyBuffer(upload, intermediate, 0, 0, sizeof(expected));
+  first->End();
+  second->Begin();
+  second->CopyBuffer(intermediate, readback, 0, 0, sizeof(expected));
+  second->End();
+  const auto semaphore = created->CreateSemaphore();
+  const auto fence = created->CreateFence();
+  const std::array signal{SemaphoreSubmitInfo{semaphore}};
+  const IRenderCommandList* firstList = first.get();
+  const IRenderCommandList* secondList = second.get();
+  created->GetQueue(0)->Submit(
+      QueueSubmitInfo{.commandLists = {&firstList, 1}, .signals = signal});
+  created->GetQueue(1)->Submit(
+      QueueSubmitInfo{.commandLists = {&secondList, 1}, .waits = signal},
+      fence);
+  ASSERT_TRUE(created->WaitForFence(fence));
+  created->InvalidateMappedMemoryRange(readback, 0, sizeof(expected));
+  auto mapped = created->MapMemory(readback);
+  const auto bytes = std::as_bytes(std::span(expected));
+  EXPECT_TRUE(std::equal(bytes.begin(), bytes.end(), mapped.begin()));
+  created->UnmapMemory(readback);
+  created->DestroyFence(fence);
+  created->DestroySemaphore(semaphore);
+  created->DestroyBuffer(upload);
+  created->DestroyBuffer(intermediate);
+  created->DestroyBuffer(readback);
 }
 } // namespace

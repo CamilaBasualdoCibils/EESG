@@ -1,3 +1,4 @@
+#include "../extern/Lighthouse-Engine/Tests/QueueTestHelpers.hpp"
 #include "MaterialRayDevice.hpp"
 #include "Materials/Materials.hpp"
 
@@ -165,7 +166,7 @@ void TestMaterialPixels(
                           .usage = {ImageUsage::DepthStencilAttachment}});
   const auto depthView =
       device.CreateImageView({.image = depth, .format = ImageFormat::Depth24Stencil8});
-  auto commands = device.CreateCommandList(QueueType::Graphics);
+  auto commands = device.CreateCommandList(0);
   commands->Begin();
   commands->BeginRendering({.depthAttachment = depthView,
                             .clearColor = true, .clearDepth = true,
@@ -178,7 +179,7 @@ void TestMaterialPixels(
   commands->Draw(PrimitiveTopology::TriangleList, uint32_t(vertices.size()), 0);
   commands->EndRendering();
   commands->End();
-  device.Submit(*commands);
+  SubmitAndWait(device, *commands);
   const auto sampler = device.CreateSampler({});
   const auto& lighting = material->shadingModel->deferredLightingPipeline;
   const auto lightingSet = device.CreateDescriptorSet({.layout = lighting.attributesLayout});
@@ -201,7 +202,7 @@ void TestMaterialPixels(
   commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
   commands->EndRendering();
   commands->End();
-  device.Submit(*commands);
+  SubmitAndWait(device, *commands);
   }
   const auto readback = device.CreateImage({.width=128,.height=128,.format=ImageFormat::RGBA8,
       .usage={ImageUsage::TransferSource,ImageUsage::TransferDestination}});
@@ -212,7 +213,7 @@ void TestMaterialPixels(
       .dstSubresource={ImageAspect::Color,0,0,1}, .dstOffsets={{{0,0,0},{128,128,1}}}};
   commands->BlitImage(material->model==SurfaceModel::Lit ? attributes.front() : image,readback,region,ImageFilter::Nearest);
   commands->End();
-  device.Submit(*commands);
+  SubmitAndWait(device, *commands);
   const auto pixels = device.ReadImage(readback);
   for (auto x : {36u, 92u})
     Check(std::to_integer<unsigned>(pixels[(60*128+x)*4+1]) > 20 ||
@@ -413,8 +414,13 @@ int main()
     if (!backend->Initialize(diagnostic))
       throw std::runtime_error(diagnostic);
     {
-      auto device =
-          backend->CreateDevice({.applicationName = "EESG material tests"});
+      auto device = backend->CreateDevice(
+          {.applicationName = "EESG material tests",
+           .queues = {
+               {.capabilities = Lighthouse::RenderQueueCapability::Graphics |
+                                Lighthouse::RenderQueueCapability::Compute |
+                                Lighthouse::RenderQueueCapability::Transfer,
+                .minCount = 1}}});
       TestLoading(*device);
       TestInstanceLifetime(*device);
       TestUnsupportedRayTracing(*device);

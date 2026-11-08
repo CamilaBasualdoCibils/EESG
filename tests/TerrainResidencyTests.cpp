@@ -234,7 +234,12 @@ void GPU(bool vulkan)
   Check(backend->Initialize(diagnostic));
   {
     Renderer renderer(backend->CreateDevice(
-        {.applicationName = "Terrain pixel residency tests"}));
+        {.applicationName = "Terrain pixel residency tests",
+         .queues = {
+             {.capabilities = Lighthouse::RenderQueueCapability::Graphics |
+                              Lighthouse::RenderQueueCapability::Compute |
+                              Lighthouse::RenderQueueCapability::Transfer,
+              .minCount = 1}}}));
     auto& device = *renderer.GetRenderDevice();
     SimpleRenderGraphAllocator allocator(device);
     TerrainSystem terrain;

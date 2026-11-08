@@ -71,7 +71,7 @@ if(EESG_BUILD_TESTING)
     add_test(NAME EESGTerrainResidencyTests COMMAND EESGTerrainResidencyTests)
 
     find_package(GTest CONFIG REQUIRED)
-    add_executable(EESGBackendTests tests/BackendDeviceTests.cpp tests/ImGuiViewportTests.cpp
+    add_executable(EESGBackendTests tests/BackendDeviceTests.cpp tests/OpenGLQueueTests.cpp tests/ImGuiViewportTests.cpp
         extern/Lighthouse-Engine/Tests/GraphicsBackendTests.cpp
         extern/Lighthouse-Engine/Tests/RenderGraphInspectionTests.cpp)
     target_link_libraries(EESGBackendTests PRIVATE Lighthouse::OpenGLBackend
