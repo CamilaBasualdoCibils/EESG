@@ -20,14 +20,18 @@ World::World(std::string name)
 void World::UpdateTerrain() {
     auto cameras = Registry().view<Player, Transform>();
     for (auto entity : cameras)
-        cameras.get<Player>(entity).cameraView.UpdateTerrainObserver(
-            m_terrainObservers, WorldPosition(cameras.get<Transform>(entity).GetPos()));
+      cameras.get<Player>(entity).cameraView.UpdateTerrainObserver(
+          m_terrainObservers,
+          WorldPosition(cameras.get<Transform>(entity).GetPos()),
+          cameras.get<Transform>(entity).GetRot());
     // Standalone CameraView components support non-player camera entities.
     auto views = Registry().view<CameraView, Transform>();
     for (auto entity : views)
-        views.get<CameraView>(entity).UpdateTerrainObserver(
-            m_terrainObservers, WorldPosition(views.get<Transform>(entity).GetPos()));
-    m_terrainChunks.Update(m_terrainObservers.Requests());
+      views.get<CameraView>(entity).UpdateTerrainObserver(
+          m_terrainObservers,
+          WorldPosition(views.get<Transform>(entity).GetPos()),
+          views.get<Transform>(entity).GetRot());
+    m_terrain.PollReadbacks();
 }
 
 Entity World::CreateEntity(std::string name) {

@@ -2,7 +2,7 @@
 #include "Materials/Materials.hpp"
 #include "World/Entity/Player.hpp"
 #include "World/EntityRenderer.hpp"
-#include "World/Terrain/TerrainRenderer.hpp"
+#include "World/World.hpp"
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <array>
 
@@ -15,9 +15,6 @@ public:
                 Lighthouse::RenderViewHandle window = {});
   ~WorldRenderer() override;
   void BuildGraph(Lighthouse::TechniqueBuildContext& context) override;
-  void UpdateTerrainMeshes() { m_terrain.Update(); }
-  void SetTerrainMeshingThreadCount(size_t count) { m_terrain.SetMeshingThreadCount(count); }
-  TerrainMeshStats TerrainStats() const { return m_terrain.Stats(); }
   void SetAmbientRadiance(Vec3 radiance);
   void SetDeltaTime(float value) noexcept
   {
@@ -62,6 +59,5 @@ private:
   Vec3 m_ambientRadiance{0.03f};
   Materials m_materials;
   EntityRenderer m_entities;
-  TerrainRenderer m_terrain;
 };
 } // namespace EESG

@@ -1,10 +1,10 @@
 #include "MaterialRayDevice.hpp"
 #include "Materials/Materials.hpp"
 
-#include "World/Terrain/TerrainMeshPool.hpp"
-#include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
+#include <Lighthouse/Engine/Assets/Mesh.hpp>
+#include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <chrono>
 #include <fstream>
 #include <stdexcept>
@@ -41,13 +41,9 @@ void TestLoading(Lighthouse::IRenderDevice& device)
   Check(device.IsValid(solid->frameLayout));
   Check(solid->source.find("struct UnlitSurface") != std::string::npos);
   Check(solid->source.find("evaluateMaterial") != std::string::npos);
-  const auto terrain = materials.Load("materials/Terrain.material.json");
-  Check(terrain->model == SurfaceModel::Lit);
-  Check(terrain->gBufferPipeline != solid->gBufferPipeline);
   Check(solid->shadingModel->attributes == std::vector{GBufferAttribute::Color});
   const auto lit = materials.Load("materials/Helmet.material.json");
   Check(lit->model == SurfaceModel::Lit);
-  Check(terrain->shadingModel == lit->shadingModel);
   Check(lit->shadingModel != solid->shadingModel);
   Check(lit->shadingModel->attributes.front() == GBufferAttribute::Color);
   Check(lit->shadingModel->attributes.size() == 5);
@@ -111,26 +107,33 @@ void TestUnsupportedRayTracing(Lighthouse::IRenderDevice& device)
   Rejects([&] { device.CreateRayTracingPipeline({}); });
 }
 
-void TestTerrainPixels(
+void TestMaterialPixels(
     Lighthouse::IRenderDevice& device,
-    const std::filesystem::path& path = "materials/Terrain.material.json",
+    const std::filesystem::path& path = "materials/SolidColor.glsl",
     const MaterialLoadOptions& options = {})
 {
   using namespace Lighthouse;
   Materials materials(device);
   const auto material = materials.Load(path);
   const auto instance = material->Instantiate(options);
-  WorldTerrain terrain;
-  // Two source chunks on opposite sides of x=0 share one geometry buffer.
-  terrain.set_voxel({-4, 0, 0}, {1, 1});
-  terrain.set_voxel({3, 0, 0}, {1, 1});
-  TerrainMeshPool pool(device);
-  const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
-  do {
-    pool.Update(terrain);
-    Check(std::chrono::steady_clock::now()<deadline);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  } while(pool.Stats().pending || pool.Stats().chunks!=2);
+  // Two fixed quads exercise material shading independently of terrain.
+  std::vector<Mesh3DVertex> vertices;
+  for (float center : {-0.4375f, 0.4375f})
+  {
+    for (const auto p : std::array<Vec2, 6>{{{-.1f, -.1f},
+                                             {.1f, -.1f},
+                                             {.1f, .1f},
+                                             {-.1f, -.1f},
+                                             {.1f, .1f},
+                                             {-.1f, .1f}}})
+      vertices.push_back({.position = {center + p.x, p.y, 0},
+                          .normal = {0, 0, 1},
+                          .uv = {(p.x + .1f) * 5, (p.y + .1f) * 5}});
+  }
+  const auto vertexBuffer =
+      device.CreateBuffer({.size = vertices.size() * sizeof(Mesh3DVertex),
+                           .usage = BufferUsage::Vertex,
+                           .initialData = std::as_bytes(std::span(vertices))});
   const MaterialFrameData camera{};
   const auto uniform = device.CreateBuffer(
       {.size = sizeof(camera),
@@ -171,7 +174,8 @@ void TestTerrainPixels(
   commands->BindPipeline(material->gBufferPipeline);
   commands->BindDescriptorSet(0, set);
   commands->BindDescriptorSet(1, instance->parametersSet);
-  pool.Draw(*commands);
+  commands->BindVertexBuffer(vertexBuffer, sizeof(Mesh3DVertex));
+  commands->Draw(PrimitiveTopology::TriangleList, uint32_t(vertices.size()), 0);
   commands->EndRendering();
   commands->End();
   device.Submit(*commands);
@@ -222,6 +226,7 @@ void TestTerrainPixels(
   for (auto image : attributes) device.DestroyImage(image);
   device.DestroyDescriptorSet(set);
   device.DestroyBuffer(uniform);
+  device.DestroyBuffer(vertexBuffer);
   device.DestroyImageView(depthView);
   device.DestroyImage(depth);
   device.DestroyImageView(view);
@@ -381,8 +386,8 @@ UnlitSurface evaluateMaterial(SurfaceInput s, MaterialParameters p) {
         "Invalid.json",
         R"({"shader":"Surface.glsl","parameters":{"uvScale":{"type":"vec2","default":[1]}}})");
     Rejects([&] { materials.Load(directory / "Invalid.json"); });
-    TestTerrainPixels(device, path,
-                      options); // Slot 1 must sample green, not red.
+    TestMaterialPixels(device, path,
+                       options); // Slot 1 must sample green, not red.
     MaterialRayDevice rayDevice(device);
     Materials rayMaterials(rayDevice);
     Check(rayMaterials.Load(path)->rayTracingPipeline.has_value());
@@ -413,7 +418,7 @@ int main()
       TestLoading(*device);
       TestInstanceLifetime(*device);
       TestUnsupportedRayTracing(*device);
-      TestTerrainPixels(*device);
+      TestMaterialPixels(*device);
       TestRayPipelineContract(*device);
       TestJsonMaterials(*device);
     }

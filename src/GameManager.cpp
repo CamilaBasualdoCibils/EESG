@@ -122,25 +122,6 @@ void GameManager::OnStart()
   leftPointLight.Add<Transform>().SetPos({-2.0f, 0, 0.0f});
   leftPointLight.Add<Light>(
       Light{.type = LightType::Point, .intensity = 2.0f, .range = 5.0f});
-  // Three blocky spheres in view of the player camera, spanning chunk
-  // boundaries so the demo also exercises pooled chunk draws.
-  for (const auto center : {Vec3(-1.05f, -0.65f, 0.3f),
-                            Vec3(0.95f, -0.6f, 0.1f), Vec3(0.0f, 0.9f, -0.5f)})
-  {
-    constexpr float radius = 0.45f;
-    const auto low = WorldTerrain::voxel_position(Dvec3(center - Vec3(radius)));
-    const auto high =
-        WorldTerrain::voxel_position(Dvec3(center + Vec3(radius)));
-    for (auto z = low[2]; z <= high[2]; ++z)
-      for (auto y = low[1]; y <= high[1]; ++y)
-        for (auto x = low[0]; x <= high[0]; ++x)
-        {
-          const Vec3 point =
-              (Vec3(x, y, z) + Vec3(0.5f)) * float(WorldTerrain::voxel_width);
-          if (glm::dot(point - center, point - center) <= radius * radius)
-            m_world.GetTerrain().set_voxel({x, y, z}, {1, 1});
-        }
-  }
   auto player = m_world.CreateEntity("Player");
   player.Add<Transform>().SetPos({0, 0, 3.6f});
   player.Add<Player>();
@@ -182,11 +163,7 @@ void GameManager::OnStart()
           .handle;
 #ifdef LIGHTHOUSE_IMGUI
   GetToolBox().AddTool<Lighthouse::InputSystemTool>();
-  GetToolBox().AddTool<TerrainTool>(m_world, [this] {
-    return static_cast<WorldRenderer*>(GetRenderer().GetTechnique(m_worldRenderer))->TerrainStats();
-  },[this](size_t count) {
-    static_cast<WorldRenderer*>(GetRenderer().GetTechnique(m_worldRenderer))->SetTerrainMeshingThreadCount(count);
-  });
+  GetToolBox().AddTool<TerrainTool>(m_world, [this] { m_recompile = true; });
   GetToolBox().AddTool<EntitySystemTool>(m_world, [this] { m_recompile = true; });
   GetToolBox().AddTool<Lighthouse::RendererTool>();
   const auto imgui = renderer.CreateView<Lighthouse::ImGuiView>();
@@ -198,7 +175,6 @@ void GameManager::OnStart()
   m_width = size.width;
   m_height = size.height;
   m_world.UpdateTerrain();
-  static_cast<WorldRenderer*>(renderer.GetTechnique(m_worldRenderer))->UpdateTerrainMeshes();
   renderer.Compile();
   std::cout << renderer.GetRenderGraph().Dot() << '\n';
 }
@@ -240,7 +216,6 @@ void GameManager::OnUpdate(float deltaTime)
   static_cast<WorldRenderer*>(renderer.GetTechnique(m_worldRenderer))
       ->SetDeltaTime(deltaTime);
   m_world.UpdateTerrain();
-  static_cast<WorldRenderer*>(renderer.GetTechnique(m_worldRenderer))->UpdateTerrainMeshes();
   if (m_recompile ||
       size.width != m_width || size.height != m_height)
   {

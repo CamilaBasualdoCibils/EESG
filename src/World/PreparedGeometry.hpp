@@ -18,8 +18,6 @@ struct GeometryGroup
 {
   std::shared_ptr<const ShadingModel> model;
   std::vector<EntityGeometry> geometry;
-  std::vector<Lighthouse::RenderGraphResource> terrain;
-  Lighthouse::DescriptorSetHandle terrainSet{};
 };
 using PreparedGeometry = std::map<SurfaceModel, GeometryGroup>;
 

@@ -1,10 +1,10 @@
 #pragma once
 
 #include "World/Entity/Entity.hpp"
-#include "World/Terrain/PerlinTerrainGenerator.hpp"
 #include "World/Terrain/TerrainObserverManager.hpp"
-#include <string>
+#include "World/Terrain/TerrainSystem.hpp"
 #include <memory>
+#include <string>
 
 #include <entt/entt.hpp>
 
@@ -20,9 +20,14 @@ public:
     const std::string& Name() const;
 
     entt::registry& Registry() { return *entity_registry; }
-    WorldTerrain& GetTerrain() { return m_terrain; }
-    const WorldTerrain& GetTerrain() const { return m_terrain; }
-    TerrainChunkManager& GetTerrainChunks() { return m_terrainChunks; }
+    TerrainSystem& GetTerrain()
+    {
+      return m_terrain;
+    }
+    const TerrainSystem& GetTerrain() const
+    {
+      return m_terrain;
+    }
     TerrainObserverManager& GetTerrainObservers() { return m_terrainObservers; }
     void UpdateTerrain();
 private:
@@ -30,10 +35,7 @@ private:
 
     std::shared_ptr<entt::registry> entity_registry;
     std::string m_name;
-    WorldTerrain m_terrain;
-    PerlinTerrainGenerator m_terrainGenerator;
-    NullTerrainStorage m_terrainStorage;
-    TerrainChunkManager m_terrainChunks{m_terrain, m_terrainGenerator, m_terrainStorage};
+    TerrainSystem m_terrain;
     TerrainObserverManager m_terrainObservers;
 
 

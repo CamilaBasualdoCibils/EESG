@@ -19,8 +19,7 @@ namespace EESG
 WorldRenderer::WorldRenderer(Lighthouse::Renderer* renderer, World* world,
                              Lighthouse::RenderViewHandle window)
     : m_renderer(renderer), m_world(world), m_window(window),
-      m_materials(*renderer->GetRenderDevice()), m_entities(*renderer, *world),
-      m_terrain(*renderer, *world, m_materials)
+      m_materials(*renderer->GetRenderDevice()), m_entities(*renderer, *world)
 {
 }
 
@@ -29,6 +28,7 @@ WorldRenderer::~WorldRenderer()
   auto& device = *m_renderer->GetRenderDevice();
   device.WaitIdle();
   ReleaseDraws();
+  m_world->GetTerrain().Release();
   for (auto mesh : m_volumes)
     if (mesh)
       m_renderer->DestroyRenderMesh(mesh);
@@ -57,6 +57,8 @@ void WorldRenderer::BuildGraph(Lighthouse::TechniqueBuildContext& context)
   EnsureLightVolumes();
   if (!m_outputPipeline)
     CreateOutputPipeline(device);
+  m_world->GetTerrain().BuildGraph(context.graph, device,
+                                   m_world->GetTerrainObservers());
   m_output = kInvalidGraphResource;
   auto cameras = m_world->Registry().view<Player, Transform>();
   for (auto entity : cameras)
@@ -155,7 +157,6 @@ void WorldRenderer::BuildCamera(Lighthouse::TechniqueBuildContext& context,
                                 ImportedRenderGraphBuffer{buffer});
   };
   m_entities.Prepare(context, projection(), groups);
-  m_terrain.Prepare(context, projection(), groups);
   RenderGraphResource sceneLights = kInvalidGraphResource;
   RenderGraphResource lightVertices = kInvalidGraphResource,
                       lightIndices = kInvalidGraphResource;
@@ -285,8 +286,6 @@ void WorldRenderer::BuildCamera(Lighthouse::TechniqueBuildContext& context,
             draw.uniform = builder.Read(draw.uniform);
             draw.parameters = builder.Read(draw.parameters);
           }
-          for (auto& resource : data.group.terrain)
-            resource = builder.Read(resource);
         },
         [this, size, stencil, projection](
             const GBufferData& data, FrameGraphPassResources& resources,
@@ -304,7 +303,6 @@ void WorldRenderer::BuildCamera(Lighthouse::TechniqueBuildContext& context,
           commands.BeginRendering(rendering);
           commands.SetStencil(StencilMode::Write, stencil);
           m_entities.Draw(data.group, projection(), resources, execute);
-          m_terrain.Draw(data.group, projection(), resources, execute);
           commands.EndRendering();
           commands.End();
         });
@@ -673,7 +671,6 @@ void WorldRenderer::ReleaseDraws()
 {
   auto& device = *m_renderer->GetRenderDevice();
   m_entities.Release();
-  m_terrain.Release();
   for (const auto& lighting : m_lighting)
   {
     if (lighting.set)

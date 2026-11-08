@@ -15,6 +15,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(EESG_BUILD_TESTING "Build EESG tests" OFF)
+if(EESG_BUILD_TESTING)
+    enable_testing()
+endif()
 
 add_subdirectory(extern/Lighthouse-Engine)
 
@@ -47,7 +50,7 @@ if(EESG_BUILD_TESTING)
     add_executable(EESGGLTFImageTests tests/GLTFImageTests.cpp
         src/World/World.cpp src/World/Entity/Entity.cpp
         src/World/WorldRenderer.cpp src/World/EntityRenderer.cpp
-        src/World/Terrain/TerrainRenderer.cpp)
+        src/World/Terrain/TerrainSystem.cpp)
     target_compile_definitions(EESGGLTFImageTests PRIVATE EESG_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(EESGGLTFImageTests PRIVATE EESGMaterials Lighthouse::OpenGLBackend
         Threads::Threads Lighthouse::VulkanBackend nlohmann_json::nlohmann_json)
@@ -56,44 +59,26 @@ if(EESG_BUILD_TESTING)
     target_link_libraries(EESGMaterialTests PRIVATE EESGMaterials
         Lighthouse::OpenGLBackend Lighthouse::VulkanBackend)
     add_test(NAME EESGMaterialTests COMMAND EESGMaterialTests)
-    add_executable(EESGTerrainMesherTests tests/TerrainMesherTests.cpp)
-    target_include_directories(EESGTerrainMesherTests PRIVATE src)
-    target_link_libraries(EESGTerrainMesherTests PRIVATE Lighthouse::Engine)
-    add_test(NAME EESGTerrainMesherTests COMMAND EESGTerrainMesherTests)
     add_executable(EESGOctreeTests tests/AdaptiveOctreeTests.cpp)
     target_include_directories(EESGOctreeTests PRIVATE src/Types)
     add_test(NAME EESGOctreeTests COMMAND EESGOctreeTests)
 
-    add_executable(EESGTerrainStreamingTests tests/TerrainStreamingTests.cpp
-        src/World/World.cpp src/World/Entity/Entity.cpp)
-    target_include_directories(EESGTerrainStreamingTests PRIVATE src)
-    target_link_libraries(EESGTerrainStreamingTests PRIVATE Lighthouse::Engine)
-    add_test(NAME EESGTerrainStreamingTests COMMAND EESGTerrainStreamingTests)
-
-    add_executable(EESGTerrainMeshUpdateTests tests/TerrainMeshUpdateTests.cpp)
-    target_include_directories(EESGTerrainMeshUpdateTests PRIVATE src)
-    target_link_libraries(EESGTerrainMeshUpdateTests PRIVATE Lighthouse::Engine Threads::Threads)
-    add_test(NAME EESGTerrainMeshUpdateTests COMMAND EESGTerrainMeshUpdateTests)
-
-    add_executable(EESGTerrainSurfaceTests tests/TerrainSurfaceTests.cpp)
-    target_include_directories(EESGTerrainSurfaceTests PRIVATE src)
-    target_link_libraries(EESGTerrainSurfaceTests PRIVATE Lighthouse::Engine)
-    add_test(NAME EESGTerrainSurfaceTests COMMAND EESGTerrainSurfaceTests)
-
-    add_executable(EESGWorldTerrainTests tests/WorldTerrainTests.cpp)
-    target_include_directories(EESGWorldTerrainTests PRIVATE src)
-    target_link_libraries(EESGWorldTerrainTests PRIVATE Lighthouse::Engine)
-    add_test(NAME EESGWorldTerrainTests COMMAND EESGWorldTerrainTests)
-
-    # Deadlock regressions use deliberately gated workers; fail boundedly if
-    # a future change accidentally makes the render-side call wait for them.
-    set_tests_properties(EESGTerrainStreamingTests EESGTerrainMeshUpdateTests PROPERTIES TIMEOUT 30)
+    add_executable(EESGTerrainResidencyTests tests/TerrainResidencyTests.cpp
+        src/World/Terrain/TerrainSystem.cpp)
+    target_include_directories(EESGTerrainResidencyTests PRIVATE src)
+    target_link_libraries(EESGTerrainResidencyTests PRIVATE Lighthouse::Engine
+        Lighthouse::OpenGLBackend Lighthouse::VulkanBackend)
+    add_test(NAME EESGTerrainResidencyTests COMMAND EESGTerrainResidencyTests)
 
     find_package(GTest CONFIG REQUIRED)
     add_executable(EESGBackendTests tests/BackendDeviceTests.cpp tests/ImGuiViewportTests.cpp
-        extern/Lighthouse-Engine/Tests/GraphicsBackendTests.cpp)
+        extern/Lighthouse-Engine/Tests/GraphicsBackendTests.cpp
+        extern/Lighthouse-Engine/Tests/RenderGraphInspectionTests.cpp)
     target_link_libraries(EESGBackendTests PRIVATE Lighthouse::OpenGLBackend
         Lighthouse::VulkanBackend GTest::gtest_main)
     include(GoogleTest)
     gtest_discover_tests(EESGBackendTests)
 endif()
+
+set_source_files_properties(src/World/Terrain/TerrainSystem.cpp PROPERTIES
+    COMPILE_DEFINITIONS EESG_TERRAIN_RESOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/res/terrain")
