@@ -1,12 +1,13 @@
 #include "GameManager.hpp"
+#include "World/Terrain/TerrainRenderer.hpp"
 #include <Lighthouse/Backends/Input/GLFW/GLFWInputBackend.hpp>
 #include "Lighthouse/Engine/Core/Application.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
-#include "Math/Types.hpp"
-#include "World/Entity/Light.hpp"
-#include "World/Entity/MeshRender.hpp"
-#include "World/Entity/Transform.hpp"
-#include "World/WorldRenderer.hpp"
+#include <Lighthouse/Extended/Math/Types.hpp>
+#include <Lighthouse/Extended/World/Entity/Light.hpp>
+#include <Lighthouse/Extended/World/Entity/MeshRender.hpp>
+#include <Lighthouse/Extended/World/Entity/Transform.hpp>
+#include <Lighthouse/Extended/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Engine/Engine.hpp>
 #include <algorithm>
@@ -19,12 +20,13 @@
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
 #include <Lighthouse/Engine/Tools/InputSystemTool.hpp>
 #include <Lighthouse/Engine/Tools/RendererTool.hpp>
-#include "Editor/EntitySystemTool.hpp"
+#include <Lighthouse/Extended/Editor/EntitySystemTool.hpp>
 #include "Editor/TerrainTool.hpp"
 #endif
 
 namespace EESG
 {
+using namespace Lighthouse;
 GameManager::~GameManager()
 {
 #ifdef LIGHTHOUSE_IMGUI
@@ -58,12 +60,12 @@ void GameManager::OnStart()
        .swapchainFormats = {Lighthouse::SwapchainFormat::HDR10,
                             Lighthouse::SwapchainFormat::ScRGB,
                             Lighthouse::SwapchainFormat::SRGB}});
-  m_helmetAsset = Lighthouse::Assets::LoadGLTF("../DamagedHelmet.gltf");
+  m_helmetAsset = Lighthouse::Assets::LoadGLTF(std::filesystem::path(EESG_ASSET_ROOT) / "DamagedHelmet.gltf");
   const auto& asset = m_helmetAsset;
   if (asset.meshes.empty() || asset.meshes[0].vertices.empty())
     throw std::runtime_error("DamagedHelmet.gltf has no mesh");
   const Lighthouse::Mesh3D& mesh3D = asset.meshes[0];
-  const auto meshHandle = renderer.UploadMesh(mesh3D);
+  const auto meshHandle = renderer.UploadMesh(mesh3D.ToRenderMesh());
   auto dragon = m_world.CreateEntity("dragon");
   auto& transform = dragon.Add<Transform>();
   // Fit the mesh to the initial player camera, applying the glTF node's
@@ -103,7 +105,7 @@ void GameManager::OnStart()
        .magnification = Lighthouse::SamplerFilter::Linear,
        .addressU = Lighthouse::SamplerAddressMode::Repeat,
        .addressV = Lighthouse::SamplerAddressMode::Repeat});
-  m_helmetMaterials = std::make_unique<Materials>(device);
+  m_helmetMaterials = std::make_unique<Materials>(device, EESG_RESOURCE_ROOT);
   MaterialLoadOptions options;
   options.textures["albedo"] = {m_helmetViews[0], m_helmetSampler};
   options.textures["metallicRoughness"] = {m_helmetViews[1], m_helmetSampler};
@@ -159,12 +161,25 @@ void GameManager::OnStart()
   m_editor->SetEnabled(true);
   m_gameplay->SetEnabled(true);
   m_worldRenderer =
-      renderer.AddTechnique<WorldRenderer>(&renderer, &m_world, m_windowView)
+      renderer.AddTechnique<Lighthouse::Renderer>(&renderer, &m_world.GetScene(), m_windowView)
           .handle;
+  auto* sceneRenderer = renderer.GetTechnique(m_worldRenderer);
+  auto* highRenderer = static_cast<Lighthouse::Renderer*>(sceneRenderer);
+  highRenderer->SetCameraProvider([this] {
+    std::vector<entt::entity> entities;
+    for (auto entity : m_world.Registry().view<Player, Transform>()) entities.push_back(entity);
+    for (auto entity : m_world.Registry().view<CameraView, Transform>()) entities.push_back(entity);
+    return entities;
+  }, [this](entt::entity entity) -> CameraView& {
+    if (auto* player = m_world.Registry().try_get<Player>(entity)) return player->cameraView;
+    return m_world.Registry().get<CameraView>(entity);
+  });
+  highRenderer->AddExtension(std::make_unique<TerrainRenderer>(m_world));
+
 #ifdef LIGHTHOUSE_IMGUI
   GetToolBox().AddTool<Lighthouse::InputSystemTool>();
   GetToolBox().AddTool<TerrainTool>(m_world, [this] { m_recompile = true; });
-  GetToolBox().AddTool<EntitySystemTool>(m_world, [this] { m_recompile = true; });
+  GetToolBox().AddTool<EntitySystemTool>(m_world.GetScene(), [this] { m_recompile = true; });
   GetToolBox().AddTool<Lighthouse::RendererTool>();
   const auto imgui = renderer.CreateView<Lighthouse::ImGuiView>();
   renderer.GetView<Lighthouse::ImGuiView>(imgui)->AddObject(GetToolBox());
@@ -213,7 +228,7 @@ void GameManager::OnUpdate(float deltaTime)
   if (length > 1) movement /= length;
   constexpr float flySpeed = 3.0f;
   transform.SetPos(transform.GetPos() + movement * (flySpeed * deltaTime));
-  static_cast<WorldRenderer*>(renderer.GetTechnique(m_worldRenderer))
+  static_cast<Lighthouse::Renderer*>(renderer.GetTechnique(m_worldRenderer))
       ->SetDeltaTime(deltaTime);
   m_world.UpdateTerrain();
   if (m_recompile ||

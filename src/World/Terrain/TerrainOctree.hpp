@@ -9,6 +9,7 @@
 
 namespace EESG
 {
+using namespace Lighthouse;
 // Access providers publish only completed, CPU-visible bytes. A mapped provider
 // must retain its allocation and prevent GPU writes for the view's lifetime.
 class ITerrainOctreeMemory

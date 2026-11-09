@@ -1,11 +1,12 @@
 #pragma once
-#include "Component.hpp"
-#include "World/CameraView.hpp"
+#include <Lighthouse/Extended/World/Entity/Component.hpp>
+#include "World/Terrain/TerrainCamera.hpp"
 namespace EESG
 {
+using namespace Lighthouse;
 struct Player
 {
-  EESG_COMPONENT_INSPECTOR(Player, {
+  LIGHTHOUSE_COMPONENT_INSPECTOR(Player, {
     auto& camera = component.cameraView;
     auto size = camera.GetResolution(); int resolution[]{int(size.x), int(size.y)};
     bool rebuild = ImGui::DragInt2("Resolution", resolution, 16, 64, 4096);
@@ -15,6 +16,6 @@ struct Player
     ImGui::DragFloat("Far plane", &camera.farPlane, 1, camera.nearPlane + .001f, 100000);
     return rebuild;
 })
-  CameraView cameraView;
+  TerrainCamera cameraView;
 };
 } // namespace EESG

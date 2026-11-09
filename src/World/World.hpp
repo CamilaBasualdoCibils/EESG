@@ -1,44 +1,22 @@
 #pragma once
-
-#include "World/Entity/Entity.hpp"
-#include "World/Terrain/TerrainObserverManager.hpp"
+#include <Lighthouse/Extended/World/Scene.hpp>
 #include "World/Terrain/TerrainSystem.hpp"
-#include <memory>
-#include <string>
-
-#include <entt/entt.hpp>
-
 namespace EESG {
-
-
+using namespace Lighthouse;
 class World {
 public:
-    explicit World(std::string name);
-
-    Entity CreateEntity(std::string name);
-
-    const std::string& Name() const;
-
-    entt::registry& Registry() { return *entity_registry; }
-    TerrainSystem& GetTerrain()
-    {
-      return m_terrain;
-    }
-    const TerrainSystem& GetTerrain() const
-    {
-      return m_terrain;
-    }
-    TerrainObserverManager& GetTerrainObservers() { return m_terrainObservers; }
-    void UpdateTerrain();
+ explicit World(std::string name) : scene_(std::move(name)) {}
+ Lighthouse::Entity CreateEntity(std::string name) { return scene_.CreateEntity(std::move(name)); }
+ const std::string& Name() const { return scene_.Name(); }
+ entt::registry& Registry() { return scene_.Registry(); }
+ Lighthouse::Scene& GetScene() { return scene_; }
+ TerrainSystem& GetTerrain() { return terrain_; }
+ const TerrainSystem& GetTerrain() const { return terrain_; }
+ TerrainObserverManager& GetTerrainObservers() { return observers_; }
+ void UpdateTerrain();
 private:
-
-
-    std::shared_ptr<entt::registry> entity_registry;
-    std::string m_name;
-    TerrainSystem m_terrain;
-    TerrainObserverManager m_terrainObservers;
-
-
+ Lighthouse::Scene scene_;
+ TerrainSystem terrain_;
+ TerrainObserverManager observers_;
 };
-
-} // namespace EESG
+}

@@ -1,11 +1,12 @@
 #pragma once
-#include "Math/Types.hpp"
+#include <Lighthouse/Extended/Math/Types.hpp>
 #include <array>
 #include <cstdint>
 #include <limits>
 
 namespace EESG
 {
+using namespace Lighthouse;
 // Change this constant to change the number of hierarchy levels above chunks.
 inline constexpr uint32_t TerrainMetaChunkLevels = 16;
 static_assert(TerrainMetaChunkLevels <= 16);

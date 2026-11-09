@@ -9,6 +9,7 @@
 
 namespace EESG
 {
+using namespace Lighthouse;
 class TerrainTool final : public Lighthouse::ISimpleTool
 {
 public:
@@ -143,9 +144,9 @@ private:
       if (players.get<Player>(entity).cameraView.GetTerrainObserver() ==
           observer)
         return true;
-    auto cameras = world_.Registry().view<CameraView>();
+    auto cameras = world_.Registry().view<TerrainCamera>();
     for (auto entity : cameras)
-      if (cameras.get<CameraView>(entity).GetTerrainObserver() == observer)
+      if (cameras.get<TerrainCamera>(entity).GetTerrainObserver() == observer)
         return true;
     return false;
   }

@@ -1,8 +1,8 @@
-#include "World/CameraView.hpp"
+#include "World/Terrain/TerrainCamera.hpp"
 #include "World/Terrain/TerrainSystem.hpp"
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -84,7 +84,7 @@ void Memory()
   bad = *observer;
   bad.verticalFovDegrees = 180;
   Rejects([&] { observers.Configure(observer, bad); });
-  CameraView camera;
+  TerrainCamera camera;
   camera.SetResolution({1920, 1080});
   camera.verticalFov = 60;
   camera.UpdateTerrainObserver(observers, {3, 4, 5});
@@ -233,7 +233,7 @@ void GPU(bool vulkan)
   std::string diagnostic;
   Check(backend->Initialize(diagnostic));
   {
-    Renderer renderer(backend->CreateDevice(
+    RenderGraphComposer renderer(backend->CreateDevice(
         {.applicationName = "Terrain pixel residency tests",
          .queues = {
              {.capabilities = Lighthouse::RenderQueueCapability::Graphics |

@@ -7,6 +7,7 @@
 namespace EESG
 {
 using namespace Lighthouse;
+using namespace Lighthouse;
 namespace
 {
 constexpr uint64_t QueueBytes = 4 + uint64_t(TerrainNodeCapacity) * 4;

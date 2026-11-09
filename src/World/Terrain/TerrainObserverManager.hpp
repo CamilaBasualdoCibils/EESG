@@ -8,6 +8,7 @@
 
 namespace EESG
 {
+using namespace Lighthouse;
 enum class TerrainObserverType : uint32_t
 {
   Point,

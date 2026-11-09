@@ -1,10 +1,12 @@
 #pragma once
+#include "World/World.hpp"
 #include "World/Entity/Player.hpp"
-#include "World/WorldRenderer.hpp"
+#include <Lighthouse/Extended/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Engine/Core/Application.hpp>
 namespace EESG
 {
+using namespace Lighthouse;
 class GameManager final : public Lighthouse::IApplication
 {
 public:

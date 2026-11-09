@@ -8,6 +8,7 @@
 
 namespace EESG
 {
+using namespace Lighthouse;
 class TerrainSystem
 {
 public:
