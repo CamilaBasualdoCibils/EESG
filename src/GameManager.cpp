@@ -8,6 +8,7 @@
 #include <Lighthouse/Extended/World/Entity/MeshRender.hpp>
 #include <Lighthouse/Extended/World/Entity/Transform.hpp>
 #include <Lighthouse/Extended/Rendering/Renderer.hpp>
+#include <Lighthouse/Extended/Rendering/SceneRenderProviders.hpp>
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Engine/Engine.hpp>
 #include <algorithm>
@@ -60,7 +61,7 @@ void GameManager::OnStart()
        .swapchainFormats = {Lighthouse::SwapchainFormat::HDR10,
                             Lighthouse::SwapchainFormat::ScRGB,
                             Lighthouse::SwapchainFormat::SRGB}});
-  m_helmetAsset = Lighthouse::Assets::LoadGLTF(std::filesystem::path(EESG_ASSET_ROOT) / "DamagedHelmet.gltf");
+ /*  m_helmetAsset = Lighthouse::Assets::LoadGLTF(std::filesystem::path(EESG_ASSET_ROOT) / "DamagedHelmet.gltf");
   const auto& asset = m_helmetAsset;
   if (asset.meshes.empty() || asset.meshes[0].vertices.empty())
     throw std::runtime_error("DamagedHelmet.gltf has no mesh");
@@ -82,9 +83,9 @@ void GameManager::OnStart()
   const Quat rotation(glm::radians(Vec3(90.0f, 0.0f, 0.0f)));
   transform.SetRot(rotation);
   transform.SetScale(Vec3(scale));
-  transform.SetPos(-(rotation * ((minimum + maximum) * (0.5f * scale))));
+  transform.SetPos(-(rotation * ((minimum + maximum) * (0.5f * scale)))); */
   auto& device = *renderer.GetRenderDevice();
-  m_helmetImages.reserve(asset.images.size());
+ /*  m_helmetImages.reserve(asset.images.size());
   for (const auto& image : asset.images)
     m_helmetImages.push_back(device.CreateImage(image.ToImageDesc()));
   // Explicit demo bindings from DamagedHelmet.gltf's material texture
@@ -114,7 +115,7 @@ void GameManager::OnStart()
   options.textures["normalMap"] = {m_helmetViews[4], m_helmetSampler};
   auto material = m_helmetMaterials->Load("materials/Helmet.material.json")
                       ->Instantiate(options);
-  dragon.Add<MeshRender>(meshHandle, std::move(material));
+  dragon.Add<MeshRender>(meshHandle, std::move(material)); */
   auto overhead = m_world.CreateEntity("Overhead light");
   overhead.Add<Transform>().SetRot(glm::quatLookAtRH(
       -glm::normalize(Vec3(-0.25f, 1.0f, 0.45f)), Vec3(0, 0, 1)));
@@ -161,20 +162,33 @@ void GameManager::OnStart()
   m_editor->SetEnabled(true);
   m_gameplay->SetEnabled(true);
   m_worldRenderer =
-      renderer.AddTechnique<Lighthouse::Renderer>(&renderer, &m_world.GetScene(), m_windowView)
+      renderer.AddTechnique<Lighthouse::Renderer>(&renderer)
           .handle;
   auto* sceneRenderer = renderer.GetTechnique(m_worldRenderer);
   auto* highRenderer = static_cast<Lighthouse::Renderer*>(sceneRenderer);
-  highRenderer->SetCameraProvider([this] {
-    std::vector<entt::entity> entities;
-    for (auto entity : m_world.Registry().view<Player, Transform>()) entities.push_back(entity);
-    for (auto entity : m_world.Registry().view<CameraView, Transform>()) entities.push_back(entity);
-    return entities;
-  }, [this](entt::entity entity) -> CameraView& {
-    if (auto* player = m_world.Registry().try_get<Player>(entity)) return player->cameraView;
-    return m_world.Registry().get<CameraView>(entity);
+  auto sceneData = std::make_shared<Lighthouse::SceneRenderData>(m_world.GetScene());
+  auto& renderView = highRenderer->CreateView(
+      std::make_shared<Lighthouse::WindowRenderOutput>(m_windowView));
+  auto& feature = renderView.SetRenderFeature<Lighthouse::DeferredRenderFeature>();
+  feature.AddProvider<Lighthouse::SceneDeferredRenderProvider>(sceneData);
+  feature.AddPreparationProvider<TerrainRenderer>(m_world);
+  renderView.SetViewSource([this] {
+    const auto& camera = m_player.Get<Player>().cameraView;
+    const auto& transform = m_player.Get<Transform>();
+    const auto size = GetRenderer().GetView<Lighthouse::WindowView>(m_windowView)
+                          ->GetWindow()->GetFramebufferSize();
+    const auto resolution = UVec2(std::max(1u, size.width), std::max(1u, size.height));
+    Lighthouse::RenderViewData view;
+    view.id = 1;
+    view.view = glm::inverse(glm::translate(Mat4(1), transform.GetPos()) *
+                             glm::mat4_cast(transform.GetRot()));
+    view.projection = glm::perspectiveRH_NO(glm::radians(camera.verticalFov),
+        float(resolution.x) / float(resolution.y), camera.nearPlane, camera.farPlane);
+    view.cameraPosition = transform.GetPos();
+    view.resolution = resolution;
+    return Lighthouse::RenderViewFamily{{view}};
   });
-  highRenderer->AddExtension(std::make_unique<TerrainRenderer>(m_world));
+  highRenderer->Update(0.0f);
 
 #ifdef LIGHTHOUSE_IMGUI
   GetToolBox().AddTool<Lighthouse::InputSystemTool>();
@@ -229,9 +243,10 @@ void GameManager::OnUpdate(float deltaTime)
   constexpr float flySpeed = 3.0f;
   transform.SetPos(transform.GetPos() + movement * (flySpeed * deltaTime));
   static_cast<Lighthouse::Renderer*>(renderer.GetTechnique(m_worldRenderer))
-      ->SetDeltaTime(deltaTime);
+      ->Update(deltaTime);
   m_world.UpdateTerrain();
   if (m_recompile ||
+      static_cast<Lighthouse::Renderer*>(renderer.GetTechnique(m_worldRenderer))->NeedsRebuild() ||
       size.width != m_width || size.height != m_height)
   {
     renderer.Compile();

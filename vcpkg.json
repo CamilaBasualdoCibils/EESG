@@ -60,7 +60,7 @@
     "gtest",
     "rpclib",
     "entt",
-    "tinygltf",
+    "fastgltf",
     "shader-slang",
     "glslang",
     "spirv-cross",
@@ -76,6 +76,8 @@
         "wayland"
       ],
       "platform": "linux"
-    }
+    },
+    "libjpeg-turbo",
+    "libpng"
   ]
 }
