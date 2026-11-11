@@ -1,4 +1,7 @@
 {
   "cmake.useCMakePresets": "always",
-  "cmake.configureArgs": []
+  "cmake.configureArgs": [],
+  "cmake.debugConfig": {
+    "cwd": "${workspaceFolder}"
+  }
 }

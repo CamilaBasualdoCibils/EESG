@@ -20,7 +20,7 @@
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
 #include <Lighthouse/Engine/Tools/InputSystemTool.hpp>
-#include <Lighthouse/Engine/Tools/RendererTool.hpp>
+#include <Lighthouse/Extended/Editor/RendererTool.hpp>
 #include <Lighthouse/Extended/Editor/EntitySystemTool.hpp>
 #include "Editor/TerrainTool.hpp"
 #endif
@@ -171,7 +171,7 @@ void GameManager::OnStart()
       std::make_shared<Lighthouse::WindowRenderOutput>(m_windowView));
   auto& feature = renderView.SetRenderFeature<Lighthouse::DeferredRenderFeature>();
   feature.AddProvider<Lighthouse::SceneDeferredRenderProvider>(sceneData);
-  feature.AddPreparationProvider<TerrainRenderer>(m_world);
+  feature.AddDeferredPreparationProvider<TerrainRenderer>(m_world);
   renderView.SetViewSource([this] {
     const auto& camera = m_player.Get<Player>().cameraView;
     const auto& transform = m_player.Get<Transform>();

@@ -34,6 +34,7 @@
     },
     "implot",
     "imgui-node-editor",
+    "graphviz",
     {
       "name": "glfw3",
       "features": [

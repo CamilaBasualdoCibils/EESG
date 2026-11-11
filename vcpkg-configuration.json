@@ -1,5 +1,8 @@
 {
   "overlay-ports": [
     "vcpkg-overlay-ports"
+  ],
+  "overlay-triplets": [
+    "extern/Lighthouse-Extended/cmake/triplets"
   ]
 }
