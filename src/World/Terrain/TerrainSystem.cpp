@@ -190,14 +190,17 @@ void TerrainSystem::Compute(RenderGraphExecutePassContext& execute,
        {4, 0, DescriptorBufferInfo{uniform}}}};
   device_->UpdateDescriptorSet(set, writes);
   auto& commands = *execute.commandList;
-  commands.Begin();
   if (mode == 1)
     commands.CopyBuffer(uniform, outputQueue, 8, 0,
                         4); // reset next queue before dispatch
+  if (mode == 1)
+    commands.MemoryBarrier({.srcStageMask = PipelineStage::Transfer,
+        .srcAccessMask = PipelineAccess::TransferWrite,
+        .dstStageMask = PipelineStage::ComputeShader,
+        .dstAccessMask = {PipelineAccess::ShaderStorageRead, PipelineAccess::ShaderStorageWrite}});
   commands.BindPipeline(pipeline);
   commands.BindDescriptorSet(0, set);
   commands.Dispatch(mode == 0 ? 1 : (TerrainNodeCapacity + 63) / 64, 1, 1);
-  commands.End();
 }
 void TerrainSystem::BuildGraph(RenderGraph& graph, IRenderDevice& device,
                                TerrainObserverManager& observers)
@@ -266,12 +269,15 @@ void TerrainSystem::BuildGraph(RenderGraph& graph, IRenderDevice& device,
              {4, 0, DescriptorBufferInfo{uniform}}}};
         device_->UpdateDescriptorSet(set, writes);
         auto& c = *e.commandList;
-        c.Begin();
         c.CopyBuffer(upload, input, 0, 0, bytes.size());
+        // Consume the upload and reuse terrain storage from the previous frame.
+        c.MemoryBarrier({.srcStageMask = {PipelineStage::Transfer, PipelineStage::ComputeShader},
+            .srcAccessMask = {PipelineAccess::TransferWrite, PipelineAccess::ShaderStorageWrite},
+            .dstStageMask = PipelineStage::ComputeShader,
+            .dstAccessMask = {PipelineAccess::ShaderStorageRead, PipelineAccess::ShaderStorageWrite}});
         c.BindPipeline(residency_);
         c.BindDescriptorSet(0, set);
         c.Dispatch(1, 1, 1);
-        c.End();
       });
   tree = seed.tree;
   auto queue = seed.queue;
@@ -298,6 +304,11 @@ void TerrainSystem::BuildGraph(RenderGraph& graph, IRenderDevice& device,
         [this, level](const Traverse& d, FrameGraphPassResources& r,
                       RenderGraphExecutePassContext& e)
         {
+          // Each level consumes the preceding dispatch's queue and terrain writes.
+          e.commandList->MemoryBarrier({.srcStageMask = PipelineStage::ComputeShader,
+              .srcAccessMask = PipelineAccess::ShaderStorageWrite,
+              .dstStageMask = PipelineStage::ComputeShader,
+              .dstAccessMask = {PipelineAccess::ShaderStorageRead, PipelineAccess::ShaderStorageWrite}});
           Compute(e, Buffer(r, d.in), Buffer(r, d.out), Buffer(r, d.tree, true),
                   Buffer(r, d.input), 1, level, residency_);
         });
@@ -337,7 +348,6 @@ void TerrainSystem::BuildGraph(RenderGraph& graph, IRenderDevice& device,
              RenderGraphExecutePassContext& e)
       {
         auto& c = *e.commandList;
-        c.Begin();
         if (inspectorEnabled_)
         {
           size_t index = 0;
@@ -347,9 +357,17 @@ void TerrainSystem::BuildGraph(RenderGraph& graph, IRenderDevice& device,
             ++skippedReadbacks_;
           else
           {
+            c.MemoryBarrier({.srcStageMask = PipelineStage::ComputeShader,
+                .srcAccessMask = PipelineAccess::ShaderStorageWrite,
+                .dstStageMask = PipelineStage::Transfer,
+                .dstAccessMask = PipelineAccess::TransferRead});
             c.CopyBuffer(Buffer(r, d.tree, true),
                          Buffer(r, d.slots[index], true), 0, 0,
                          TerrainBufferBytes);
+            c.MemoryBarrier({.srcStageMask = PipelineStage::Transfer,
+                .srcAccessMask = PipelineAccess::TransferWrite,
+                .dstStageMask = PipelineStage::Host,
+                .dstAccessMask = PipelineAccess::HostRead});
             auto& slot = readbacks_[index];
             if (!slot.semaphore)
               slot.semaphore =
@@ -363,7 +381,6 @@ void TerrainSystem::BuildGraph(RenderGraph& graph, IRenderDevice& device,
             };
           }
         }
-        c.End();
       });
 }
 void TerrainSystem::PollReadbacks()
