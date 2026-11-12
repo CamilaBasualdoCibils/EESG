@@ -1,6 +1,7 @@
 #pragma once
 #include "World/World.hpp"
-#include <Lighthouse/Extended/Rendering/RenderFeatures.hpp>
+#include <Lighthouse/Extended/Rendering/ForwardRenderFeature.hpp>
+#include <Lighthouse/Extended/Rendering/DeferredRenderFeature.hpp>
 namespace EESG
 {
 using namespace Lighthouse;
